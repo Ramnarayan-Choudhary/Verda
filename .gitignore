@@ -1,0 +1,30 @@
+# Dependencies
+vreda-app/node_modules/
+
+# Next.js build
+vreda-app/.next/
+vreda-app/out/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# Keys
+*.pem
