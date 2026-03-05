@@ -1,0 +1,36 @@
+[project]
+name = "hypo-claude"
+version = "2.0.0"
+description = "VREDA Epistemic Hypothesis Engine (Claude-optimized)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.32.0",
+    "langgraph>=0.2.0",
+    "langchain-openai>=0.2.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "structlog>=24.0.0",
+    "httpx>=0.27.0",
+    "pymupdf>=1.24.0",
+    "tenacity>=9.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["setuptools>=70.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hypo_claude*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

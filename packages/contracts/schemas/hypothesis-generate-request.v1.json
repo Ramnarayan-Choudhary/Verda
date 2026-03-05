@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vreda/contracts/hypothesis-generate-request.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "arxiv_id": {
+      "type": ["string", "null"]
+    },
+    "pdf_path": {
+      "type": ["string", "null"]
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

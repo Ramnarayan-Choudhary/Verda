@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vreda-hypothesis-gpt"
+version = "0.1.0"
+description = "Standalone GPT hypothesis engine for VREDA"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.34,<1.0",
+  "pydantic>=2.10,<3.0",
+  "pydantic-settings>=2.7,<3.0",
+  "httpx>=0.28,<1.0",
+  "numpy>=2.0,<3.0",
+  "sentence-transformers>=3.4,<4.0",
+  "structlog>=24.0,<25.0",
+  "pymupdf>=1.25,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.25",
+]
+
+[project.scripts]
+hypo-gpt = "hypo_gpt.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hypo_gpt"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vreda/contracts/hypothesis-generate-response.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["hypotheses", "reasoning_context", "gap_analysis_used", "reflection_rounds", "generation_strategy"],
+  "properties": {
+    "hypotheses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "reasoning_context": {
+      "type": "string"
+    },
+    "gap_analysis_used": {
+      "type": "boolean"
+    },
+    "reflection_rounds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "generation_strategy": {
+      "type": "string",
+      "enum": ["knowledge_grounded", "prompt_based"]
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vreda/contracts/room-progress-event.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "message"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["progress", "warning", "complete", "error"]
+    },
+    "step": {
+      "type": ["string", "null"]
+    },
+    "message": {
+      "type": "string"
+    },
+    "current": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "total": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "data": {
+      "type": ["object", "null"]
+    }
+  }
+}

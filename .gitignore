@@ -1,9 +1,24 @@
 # Dependencies
+apps/web/node_modules/
 vreda-app/node_modules/
 
 # Next.js build
+apps/web/.next/
+apps/web/out/
 vreda-app/.next/
 vreda-app/out/
+
+# Python environments/cache
+services/hypothesis-room/.venv/
+services/hypothesis-room/.pytest_cache/
+services/hypothesis-room/.ruff_cache/
+services/hypothesis-room/__pycache__/
+services/hypothesis-room/**/*.pyc
+vreda-hypothesis/.venv/
+vreda-hypothesis/.pytest_cache/
+vreda-hypothesis/.ruff_cache/
+vreda-hypothesis/__pycache__/
+vreda-hypothesis/**/*.pyc
 
 # Environment variables
 .env

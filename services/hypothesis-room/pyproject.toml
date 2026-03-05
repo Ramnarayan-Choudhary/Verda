@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vreda-hypothesis"
+version = "0.1.0"
+description = "Advanced hypothesis generation module for VREDA.ai — multi-agent, knowledge-grounded, evolutionary refinement pipeline"
+requires-python = ">=3.12"
+license = "MIT"
+
+dependencies = [
+    # LLM Orchestration — arXiv:2502.18864 (AI Co-Scientist multi-agent loop)
+    "langgraph>=0.4,<1.0",
+    "langchain>=0.3,<1.0",
+    "langchain-openai>=0.3,<1.0",
+    "langchain-google-genai>=2.1,<3.0",
+
+    # Embeddings & Vector Store (Supabase pgvector — shared DB with Next.js app)
+    "sentence-transformers>=3.4,<4.0",
+    "supabase>=2.12,<3.0",
+    "vecs>=0.4,<1.0",
+    "numpy>=2.0,<3.0",
+
+    # Knowledge Graph — arXiv:2510.09901 (knowledge-grounded novelty checks)
+    "networkx>=3.4,<4.0",
+
+    # External APIs
+    "httpx>=0.28,<1.0",
+
+    # Server
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.34,<1.0",
+
+    # Data validation
+    "pydantic>=2.10,<3.0",
+    "pydantic-settings>=2.7,<3.0",
+
+    # PDF parsing
+    "pymupdf>=1.25,<2.0",
+
+    # Utilities
+    "tenacity>=9.0,<10.0",
+    "structlog>=24.0,<25.0",
+    "python-dotenv>=1.0,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.25",
+    "pytest-httpx>=0.35",
+    "respx>=0.22",
+    "ruff>=0.9",
+]
+
+[project.scripts]
+vreda-hypothesis = "vreda_hypothesis.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vreda_hypothesis"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

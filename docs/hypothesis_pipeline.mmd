@@ -1,0 +1,41 @@
+flowchart LR
+  %% Inputs
+  U[Researcher Uploads PDF / arXiv] --> S1
+  Q[User Prompt: Brainstorm Hypotheses] --> S5
+
+  %% Main pipeline
+  subgraph CORE["VREDA Hypothesis Generation Pipeline"]
+    direction LR
+    S1["1) Ingestion & Parsing<br/>Structured extraction from paper"] --> S2
+    S2["2) External Grounding<br/>arXiv + Semantic Scholar + PapersWithCode"] --> S3
+    S3["3) Seed Overgeneration<br/>RAG grounding + diversity mutations"] --> S4
+    S4["4) Initial Filtering<br/>Dedup + novelty + feasibility + verifiability"] --> S5["5) Multi-Agent Refinement<br/>Proposer ↔ Critic ↔ Evolver + Meta-review"]
+    S5 --> S6["6) Tournament Ranking<br/>Pairwise judging + Elo + diversity"]
+    S6 --> S7["7) Final Output<br/>Top hypotheses + budget + experiment plan"]
+  end
+
+  %% Outputs
+  S7 --> O["UI Cards<br/>Paper analysis + 6-factor scoring"]
+  S7 --> H["Human Gating<br/>Approve / rerank / iterate"]
+
+  %% Shared infra
+  subgraph INFRA["Shared Intelligence & Reliability Layer"]
+    direction LR
+    VS[(Vector Store)]
+    KG[(Knowledge Graph)]
+    LLM["LLM Router<br/>Primary + fallback"]
+    RL["Rate limits + caching"]
+    FB["Fallback outputs if provider fails"]
+  end
+
+  S1 -.chunks.-> VS
+  S2 -.entities/relations.-> KG
+  S3 -.retrieve.-> VS
+  S4 -.novelty checks.-> KG
+  S5 -.agent calls.-> LLM
+  S6 -.judge calls.-> LLM
+  LLM -.failure path.-> FB
+  FB -.safe output.-> S7
+  S1 -.api usage.-> RL
+  S2 -.api usage.-> RL
+  S5 -.token controls.-> RL
