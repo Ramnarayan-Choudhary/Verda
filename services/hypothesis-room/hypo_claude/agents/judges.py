@@ -25,19 +25,24 @@ class JudgePanel:
         self._llm = llm
 
     async def evaluate(
-        self, hypothesis: StructuredHypothesis, verdict: TribunalVerdict
+        self, hypothesis: StructuredHypothesis, verdict: TribunalVerdict,
+        fast_mode: bool = True,
     ) -> list[JudgeScore]:
-        """Run all 3 judges in parallel for one hypothesis."""
+        """Score a hypothesis. Fast mode uses 1 judge (generalist), full uses 3."""
         h_json = json.dumps(hypothesis.model_dump(), indent=1)
         v_json = json.dumps(verdict.model_dump(), indent=1)
 
-        conservative, generalist, practitioner = await asyncio.gather(
-            self._judge(conservative_judge_prompt, h_json, v_json, AgentRole.CONSERVATIVE_JUDGE),
-            self._judge(generalist_judge_prompt, h_json, v_json, AgentRole.GENERALIST_JUDGE),
-            self._judge(practitioner_judge_prompt, h_json, v_json, AgentRole.PRACTITIONER_JUDGE),
-        )
+        if fast_mode:
+            generalist = await self._judge(generalist_judge_prompt, h_json, v_json, AgentRole.GENERALIST_JUDGE)
+            scores = [generalist]
+        else:
+            conservative, generalist, practitioner = await asyncio.gather(
+                self._judge(conservative_judge_prompt, h_json, v_json, AgentRole.CONSERVATIVE_JUDGE),
+                self._judge(generalist_judge_prompt, h_json, v_json, AgentRole.GENERALIST_JUDGE),
+                self._judge(practitioner_judge_prompt, h_json, v_json, AgentRole.PRACTITIONER_JUDGE),
+            )
+            scores = [conservative, generalist, practitioner]
 
-        scores = [conservative, generalist, practitioner]
         composites = [s.scores.composite for s in scores]
         logger.info(
             "judges.scored",

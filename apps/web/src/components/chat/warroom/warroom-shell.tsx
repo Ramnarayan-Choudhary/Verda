@@ -84,6 +84,11 @@ const MIN_RIGHT_PANEL_WIDTH = 280;
 const MAX_RIGHT_PANEL_WIDTH = 520;
 const MIN_TOP_SECTION_HEIGHT = 180;
 const MAX_TOP_SECTION_HEIGHT = 460;
+const DEFAULT_THEME: ThemeMode = 'light';
+const DEFAULT_LEFT_PANEL_WIDTH = 300;
+const DEFAULT_RIGHT_PANEL_WIDTH = 330;
+const DEFAULT_TOP_SECTION_HEIGHT = 260;
+const DEFAULT_TRANSCRIPT_OPEN = true;
 
 function roomStateFromConversation(conversation: Conversation, activeId: string | null): RoomState {
   if (conversation.id === activeId) return 'active';
@@ -147,48 +152,17 @@ export default function WarRoomShell({
   onFetchArxiv,
   inputDisabled = false,
 }: WarRoomShellProps) {
-  const initialTheme = (): ThemeMode => {
-    if (typeof window === 'undefined') return 'light';
-    const saved = window.localStorage.getItem('warroom:theme');
-    return saved === 'dark' ? 'dark' : 'light';
-  };
-
-  const initialLeftPanelWidth = (): number => {
-    if (typeof window === 'undefined') return 300;
-    const saved = Number.parseInt(window.localStorage.getItem('warroom:leftWidth') || '', 10);
-    if (Number.isNaN(saved)) return 300;
-    return Math.max(MIN_LEFT_PANEL_WIDTH, Math.min(MAX_LEFT_PANEL_WIDTH, saved));
-  };
-
-  const initialRightPanelWidth = (): number => {
-    if (typeof window === 'undefined') return 330;
-    const saved = Number.parseInt(window.localStorage.getItem('warroom:rightWidth') || '', 10);
-    if (Number.isNaN(saved)) return 330;
-    return Math.max(MIN_RIGHT_PANEL_WIDTH, Math.min(MAX_RIGHT_PANEL_WIDTH, saved));
-  };
-
-  const initialTopSectionHeight = (): number => {
-    if (typeof window === 'undefined') return 260;
-    const saved = Number.parseInt(window.localStorage.getItem('warroom:topHeight') || '', 10);
-    if (Number.isNaN(saved)) return 260;
-    return Math.max(MIN_TOP_SECTION_HEIGHT, Math.min(MAX_TOP_SECTION_HEIGHT, saved));
-  };
-
-  const initialTranscriptOpen = (): boolean => {
-    if (typeof window === 'undefined') return true;
-    return window.localStorage.getItem('warroom:transcript') !== '0';
-  };
-
   const [tab, setTab] = useState<CanvasTab>('arena');
-  const [theme, setTheme] = useState<ThemeMode>(initialTheme);
+  const [theme, setTheme] = useState<ThemeMode>(DEFAULT_THEME);
   const [eventFilter, setEventFilter] = useState<'all' | QuestRoom>('all');
   const [selectedHypothesisId, setSelectedHypothesisId] = useState<string | null>(null);
   const [refinementDrafts, setRefinementDrafts] = useState<Record<string, string>>({});
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [leftPanelWidth, setLeftPanelWidth] = useState(initialLeftPanelWidth);
-  const [rightPanelWidth, setRightPanelWidth] = useState(initialRightPanelWidth);
-  const [topSectionHeight, setTopSectionHeight] = useState(initialTopSectionHeight);
-  const [transcriptOpen, setTranscriptOpen] = useState(initialTranscriptOpen);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(DEFAULT_LEFT_PANEL_WIDTH);
+  const [rightPanelWidth, setRightPanelWidth] = useState(DEFAULT_RIGHT_PANEL_WIDTH);
+  const [topSectionHeight, setTopSectionHeight] = useState(DEFAULT_TOP_SECTION_HEIGHT);
+  const [transcriptOpen, setTranscriptOpen] = useState(DEFAULT_TRANSCRIPT_OPEN);
+  const [prefsHydrated, setPrefsHydrated] = useState(false);
   const [showArxivFetch, setShowArxivFetch] = useState(false);
   const [arxivDraft, setArxivDraft] = useState('');
   const [commandDraft, setCommandDraft] = useState('');
@@ -202,24 +176,56 @@ export default function WarRoomShell({
   });
 
   useEffect(() => {
+    const parseStoredNumber = (key: string, fallback: number, min: number, max: number): number => {
+      const raw = window.localStorage.getItem(key);
+      const parsed = Number.parseInt(raw || '', 10);
+      if (Number.isNaN(parsed)) return fallback;
+      return Math.max(min, Math.min(max, parsed));
+    };
+
+    const savedTheme = window.localStorage.getItem('warroom:theme');
+    const nextTheme: ThemeMode = savedTheme === 'dark' ? 'dark' : DEFAULT_THEME;
+    const nextLeftWidth = parseStoredNumber('warroom:leftWidth', DEFAULT_LEFT_PANEL_WIDTH, MIN_LEFT_PANEL_WIDTH, MAX_LEFT_PANEL_WIDTH);
+    const nextRightWidth = parseStoredNumber('warroom:rightWidth', DEFAULT_RIGHT_PANEL_WIDTH, MIN_RIGHT_PANEL_WIDTH, MAX_RIGHT_PANEL_WIDTH);
+    const nextTopHeight = parseStoredNumber('warroom:topHeight', DEFAULT_TOP_SECTION_HEIGHT, MIN_TOP_SECTION_HEIGHT, MAX_TOP_SECTION_HEIGHT);
+    const nextTranscriptOpen = window.localStorage.getItem('warroom:transcript') !== '0';
+
+    const raf = window.requestAnimationFrame(() => {
+      setTheme(nextTheme);
+      setLeftPanelWidth(nextLeftWidth);
+      setRightPanelWidth(nextRightWidth);
+      setTopSectionHeight(nextTopHeight);
+      setTranscriptOpen(nextTranscriptOpen);
+      setPrefsHydrated(true);
+    });
+
+    return () => window.cancelAnimationFrame(raf);
+  }, []);
+
+  useEffect(() => {
+    if (!prefsHydrated) return;
     window.localStorage.setItem('warroom:theme', theme);
-  }, [theme]);
+  }, [prefsHydrated, theme]);
 
   useEffect(() => {
+    if (!prefsHydrated) return;
     window.localStorage.setItem('warroom:leftWidth', String(leftPanelWidth));
-  }, [leftPanelWidth]);
+  }, [prefsHydrated, leftPanelWidth]);
 
   useEffect(() => {
+    if (!prefsHydrated) return;
     window.localStorage.setItem('warroom:rightWidth', String(rightPanelWidth));
-  }, [rightPanelWidth]);
+  }, [prefsHydrated, rightPanelWidth]);
 
   useEffect(() => {
+    if (!prefsHydrated) return;
     window.localStorage.setItem('warroom:topHeight', String(topSectionHeight));
-  }, [topSectionHeight]);
+  }, [prefsHydrated, topSectionHeight]);
 
   useEffect(() => {
+    if (!prefsHydrated) return;
     window.localStorage.setItem('warroom:transcript', transcriptOpen ? '1' : '0');
-  }, [transcriptOpen]);
+  }, [prefsHydrated, transcriptOpen]);
 
   useEffect(() => {
     let cancelled = false;

@@ -7,11 +7,13 @@ Designed for OpenAI as primary provider, but swappable via LLM_PROVIDER.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_ROOT_ENV_LOCAL = _REPO_ROOT / ".env.local"
 
 
 class OpenAIConfig(BaseSettings):
@@ -34,6 +36,15 @@ class AnthropicConfig(BaseSettings):
     model_config = {"env_prefix": "ANTHROPIC_"}
 
 
+class GeminiConfig(BaseSettings):
+    """Google Gemini API configuration — used for FAST tier (extraction, serialization)."""
+    api_key: str = Field(default="")
+    fast_model: str = Field(default="gemini-2.5-flash")
+    reasoning_model: str = Field(default="gemini-1.5-pro")
+
+    model_config = {"env_prefix": "GEMINI_"}
+
+
 class SupabaseConfig(BaseSettings):
     """Supabase connection for pgvector."""
     url: str = Field(default="")
@@ -45,7 +56,7 @@ class SupabaseConfig(BaseSettings):
 
 class LLMRuntimeConfig(BaseSettings):
     """Operational safeguards for LLM calls."""
-    request_timeout_s: int = Field(default=60, ge=10, le=300)
+    request_timeout_s: int = Field(default=120, ge=10, le=300)
     max_retries: int = Field(default=2, ge=0, le=5)
     provider: str = Field(default="openai", description="openai | anthropic")
 
@@ -61,24 +72,24 @@ class ServerConfig(BaseSettings):
 
 class PipelineDefaults(BaseSettings):
     """Default pipeline parameters (overridable per-request)."""
-    max_hypotheses_per_strategy: int = Field(default=5, ge=2, le=10)
-    tribunal_cycles: int = Field(default=3, ge=1, le=5)
+    max_hypotheses_per_strategy: int = Field(default=1, ge=1, le=10)
+    tribunal_cycles: int = Field(default=1, ge=1, le=5)
     dedup_threshold: float = Field(default=0.80, ge=0.5, le=1.0)
-    max_concurrent_strategies: int = Field(default=4, ge=1, le=7)
-    max_concurrent_critics: int = Field(default=4, ge=1, le=8)
+    max_concurrent_strategies: int = Field(default=2, ge=1, le=7)
+    max_concurrent_critics: int = Field(default=1, ge=1, le=8)
 
     model_config = {"env_prefix": "PIPELINE_"}
 
 
 # Stage timeouts (seconds)
 DEFAULT_STAGE_TIMEOUTS: dict[str, int] = {
-    "intelligence": 180,
-    "cartography": 240,
-    "generation": 240,
-    "tribunal": 360,
-    "evaluation": 180,
-    "portfolio": 60,
-    "output": 15,
+    "intelligence": 300,
+    "cartography": 300,
+    "generation": 600,
+    "tribunal": 900,
+    "evaluation": 600,
+    "portfolio": 300,
+    "output": 60,
 }
 
 
@@ -87,6 +98,7 @@ class Settings(BaseSettings):
 
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)
+    gemini: GeminiConfig = Field(default_factory=GeminiConfig)
     supabase: SupabaseConfig = Field(default_factory=SupabaseConfig)
     llm: LLMRuntimeConfig = Field(default_factory=LLMRuntimeConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
@@ -95,26 +107,19 @@ class Settings(BaseSettings):
     semantic_scholar_api_key: str = Field(default="")
     tavily_api_key: str = Field(default="")
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    model_config = {
+        "env_file": str(_ROOT_ENV_LOCAL),
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 def load_settings() -> Settings:
-    """Load settings from environment / .env file."""
+    """Load settings from environment / root .env.local file."""
     from dotenv import load_dotenv
 
-    service_root = Path(__file__).resolve().parents[1]
-    repo_root = service_root.parents[1]
-    env_candidates = [
-        service_root / ".env",
-        repo_root / ".env",
-        repo_root / "apps/web/.env.local",
-    ]
-
-    # Load all known env files in order; later files override earlier values.
-    # This lets hypo_claude pick up app-level secrets from apps/web/.env.local.
-    for env_path in env_candidates:
-        if env_path.exists():
-            load_dotenv(env_path, override=True)
+    if _ROOT_ENV_LOCAL.exists():
+        load_dotenv(_ROOT_ENV_LOCAL, override=True)
 
     return Settings()
 

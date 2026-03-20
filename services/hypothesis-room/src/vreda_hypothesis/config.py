@@ -15,10 +15,13 @@ When only ChatAnywhere is configured, ALL tiers are covered:
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_ROOT_ENV_LOCAL = _REPO_ROOT / ".env.local"
 
 
 class ChatAnywhereConfig(BaseSettings):
@@ -141,22 +144,19 @@ class Settings(BaseSettings):
     semantic_scholar_api_key: str = Field(default="")
     tavily_api_key: str = Field(default="")
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": str(_ROOT_ENV_LOCAL),
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 def load_settings() -> Settings:
-    """Load settings from environment / .env file."""
-    for env_path in [
-        ".env",
-        "../../apps/web/.env.local",
-        "../../vreda-app/.env.local",
-        "../vreda-app/.env.local",
-    ]:
-        if os.path.exists(env_path):
-            from dotenv import load_dotenv
+    """Load settings from environment / root .env.local file."""
+    from dotenv import load_dotenv
 
-            load_dotenv(env_path)
-            break
+    if _ROOT_ENV_LOCAL.exists():
+        load_dotenv(_ROOT_ENV_LOCAL, override=True)
 
     return Settings()
 

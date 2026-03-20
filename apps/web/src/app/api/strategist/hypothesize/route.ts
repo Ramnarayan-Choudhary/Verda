@@ -13,7 +13,7 @@ import type { StrategistRoomState, BrainstormerOutput, GeneratorOutput, CriticOu
 import { appendQuestEvent } from '@/lib/quest-events';
 import { isArxivId, normalizeArxivId } from '@/lib/literature/arxiv';
 
-export const maxDuration = 300; // 5 minutes — Python service needs time for 8 stages
+export const maxDuration = 600; // 10 minutes — full pipeline with 7 strategies + tribunal + evaluation
 
 type HypothesisEngine = 'gpt' | 'claude';
 
@@ -102,6 +102,63 @@ interface HypothesisServiceInput {
 
 interface HypothesisServiceOptions {
     topK?: number;
+    researchIntent?: string;
+}
+
+function normalizeDomainHint(
+    rawDomain: string,
+    paperAnalysis?: {
+        title?: string;
+        abstract_summary?: string;
+        key_claims?: string[];
+        contributions?: string[];
+    } | null,
+    userMessage?: string
+): string {
+    const domain = (rawDomain || 'other').toLowerCase();
+    if (domain !== 'ml') return domain;
+
+    const text = [
+        paperAnalysis?.title || '',
+        paperAnalysis?.abstract_summary || '',
+        ...(paperAnalysis?.key_claims || []),
+        ...(paperAnalysis?.contributions || []),
+        userMessage || '',
+    ].join(' ').toLowerCase();
+
+    if (/(vision|image|segmentation|detection|object detection|pixel|video|pruning|cnn|vit)/.test(text)) return 'cv';
+    if (/(language|nlp|token|llm|bert|gpt|prompt|decoder|translation|summarization)/.test(text)) return 'nlp';
+    if (/(robot|robotics|manipulation|locomotion|control policy|trajectory)/.test(text)) return 'robotics';
+    return domain;
+}
+
+function buildResearchIntent(
+    message: string,
+    domain: string,
+    paperAnalysis?: {
+        title?: string;
+        contributions?: string[];
+        key_claims?: string[];
+        limitations?: string[];
+    } | null
+): string {
+    const userRequest = message.trim();
+    const title = readString(paperAnalysis?.title, 'uploaded paper');
+    const contributions = (paperAnalysis?.contributions || []).slice(0, 2).map(item => item.trim()).filter(Boolean);
+    const claims = (paperAnalysis?.key_claims || []).slice(0, 2).map(item => item.trim()).filter(Boolean);
+    const limitations = (paperAnalysis?.limitations || []).slice(0, 2).map(item => item.trim()).filter(Boolean);
+
+    const parts = [
+        `Paper: ${title}`,
+        `Domain: ${domain}`,
+        claims.length > 0 ? `Key claims: ${claims.join(' ; ')}` : '',
+        contributions.length > 0 ? `Core contributions: ${contributions.join(' ; ')}` : '',
+        limitations.length > 0 ? `Known limitations: ${limitations.join(' ; ')}` : '',
+        userRequest ? `User objective: ${userRequest}` : '',
+        'Task: generate specific, testable, non-generic hypotheses grounded in the paper evidence.',
+    ].filter(Boolean);
+
+    return parts.join(' | ').slice(0, 1400);
 }
 
 interface NormalizedHypothesis {
@@ -188,6 +245,7 @@ async function callHypothesisService(
         arxivId: input.arxivId || null,
         pdfPath: input.pdfPath || null,
         domain,
+        researchIntentPreview: options?.researchIntent?.slice(0, 220) || null,
         topK,
         maxSeeds,
         maxCycles,
@@ -205,17 +263,27 @@ async function callHypothesisService(
         const portfolioSafeSlots = topK >= 5 ? 2 : 1;
         const portfolioMoonshotSlots = topK >= 5 ? 1 : 0;
         const portfolioMediumSlots = Math.max(1, topK - portfolioSafeSlots - portfolioMoonshotSlots);
-        requestConfig.max_hypotheses_per_strategy = topK <= 4 ? 2 : 3;
-        requestConfig.tribunal_cycles = topK <= 4 ? 2 : 3;
+        requestConfig.max_hypotheses_per_strategy = 1;
+        requestConfig.tribunal_cycles = 1;
         requestConfig.max_concurrent_strategies = 2;
         requestConfig.max_concurrent_critics = 1;
         requestConfig.portfolio_safe_slots = portfolioSafeSlots;
         requestConfig.portfolio_medium_slots = portfolioMediumSlots;
         requestConfig.portfolio_moonshot_slots = portfolioMoonshotSlots;
     } else {
-        requestConfig.max_seeds = maxSeeds;
-        requestConfig.max_cycles = maxCycles;
         requestConfig.top_k = topK;
+        requestConfig.pipeline_version = 'v2';
+        requestConfig.output_schema = 'legacy';
+        requestConfig.enable_memory = true;
+        requestConfig.enable_external_search = true;
+        requestConfig.domain_hint = domain;
+        requestConfig.max_rounds = maxCycles;
+        requestConfig.hypotheses_per_strategy = topK <= 4 ? 3 : 4;
+        requestConfig.min_hypotheses_pool = Math.max(12, topK * 3);
+        requestConfig.tribunal_cycles = topK <= 4 ? 2 : 3;
+        requestConfig.risk_appetite = topK >= 5 ? 'balanced' : 'conservative';
+        requestConfig.max_seeds = maxSeeds; // Backward-compatible no-op for older services.
+        requestConfig.max_cycles = maxCycles; // Backward-compatible no-op for older services.
     }
 
     const response = await fetch(url, {
@@ -224,8 +292,10 @@ async function callHypothesisService(
         body: JSON.stringify({
             arxiv_id: input.arxivId ?? null,
             pdf_path: input.pdfPath ?? null,
+            research_intent: options?.researchIntent ?? null,
             config: requestConfig,
         }),
+        signal: AbortSignal.timeout(5 * 60 * 1000), // 5 minutes
     });
 
     if (!response.ok) {
@@ -476,31 +546,40 @@ function mapPythonToFrontend(pythonOutput: PythonGeneratorOutput): {
         pythonOutput.generation_strategy === 'prompt_based' ? 'prompt_based' : 'knowledge_grounded';
 
     const brainstormer_output: BrainstormerOutput = {
-        hypotheses: normalizedHypotheses.map(h => ({
-            id: h.id,
-            type: mapHypothesisType(h.type),
-            title: h.title,
-            description: h.description,
-            testable_prediction: h.testable_prediction,
-            expected_outcome: h.expected_outcome,
-            feasibility_score: (h.scores.feasibility ?? 50) / 100,
-            confidence: (h.scores.grounding ?? 50) / 100,
-            required_modifications: h.required_modifications,
-            estimated_complexity: h.estimated_complexity,
-            evidence_basis: {
-                supporting_papers: h.evidence_basis.supporting_papers,
-                prior_results: h.evidence_basis.prior_results,
-                key_insight: h.evidence_basis.key_insight,
-            },
-            novelty_assessment: {
-                is_novel: h.novelty_assessment.is_novel,
-                similar_work: h.novelty_assessment.similar_work,
-                what_is_new: h.novelty_assessment.what_is_new,
-                novelty_score: h.novelty_assessment.novelty_score / 100,
-            },
-            experiment_design: undefined,
-            critic_assessment: h.critic_assessment || undefined,
-        })),
+        hypotheses: normalizedHypotheses.map(h => {
+            // Confidence should reflect grounding + testability + feasibility, not grounding alone.
+            const confidenceScore = clampPercent(
+                ((h.scores.grounding ?? 50) * 0.45)
+                + ((h.scores.testability ?? 50) * 0.25)
+                + ((h.scores.feasibility ?? 50) * 0.20)
+                + (h.composite_score * 0.10)
+            );
+            return {
+                id: h.id,
+                type: mapHypothesisType(h.type),
+                title: h.title,
+                description: h.description,
+                testable_prediction: h.testable_prediction,
+                expected_outcome: h.expected_outcome,
+                feasibility_score: (h.scores.feasibility ?? 50) / 100,
+                confidence: confidenceScore / 100,
+                required_modifications: h.required_modifications,
+                estimated_complexity: h.estimated_complexity,
+                evidence_basis: {
+                    supporting_papers: h.evidence_basis.supporting_papers,
+                    prior_results: h.evidence_basis.prior_results,
+                    key_insight: h.evidence_basis.key_insight,
+                },
+                novelty_assessment: {
+                    is_novel: h.novelty_assessment.is_novel,
+                    similar_work: h.novelty_assessment.similar_work,
+                    what_is_new: h.novelty_assessment.what_is_new,
+                    novelty_score: h.novelty_assessment.novelty_score / 100,
+                },
+                experiment_design: undefined,
+                critic_assessment: h.critic_assessment || undefined,
+            };
+        }),
         reasoning_context: pythonOutput.reasoning_context,
     };
 
@@ -716,7 +795,7 @@ export async function POST(request: NextRequest) {
         const body = await request.json();
         const { session_id, message } = body;
         const requestedEngineRaw = typeof body.hypothesis_engine === 'string' ? body.hypothesis_engine.toLowerCase() : '';
-        const requestedEngine: HypothesisEngine = requestedEngineRaw === 'claude' ? 'claude' : 'gpt';
+        const requestedEngine: HypothesisEngine = requestedEngineRaw === 'gpt' ? 'gpt' : 'claude';
 
         try {
             validateUUID(session_id, 'session_id');
@@ -860,7 +939,8 @@ export async function POST(request: NextRequest) {
         // ─── Call Python Service ───
         try {
             const arxivId = await resolveArxivIdForSession(state, supabase);
-            const domain = state.paper_analysis?.domain || 'other';
+            const rawDomain = state.paper_analysis?.domain || 'other';
+            const domain = normalizeDomainHint(rawDomain, state.paper_analysis, message);
             let tempPdfPath: string | null = null;
             let serviceInput: HypothesisServiceInput | null = null;
 
@@ -898,6 +978,7 @@ export async function POST(request: NextRequest) {
             logger.info('Using hypothesis service', {
                 arxivId: serviceInput.arxivId || null,
                 usesUploadedPdf: Boolean(serviceInput.pdfPath),
+                rawDomain,
                 domain,
                 requestedHypothesisCount,
                 engine: requestedEngine,
@@ -905,8 +986,10 @@ export async function POST(request: NextRequest) {
             });
 
             try {
+                const researchIntent = buildResearchIntent(message, domain, state.paper_analysis);
                 const pythonOutput = await callHypothesisService(serviceInput, domain, selectedServiceUrl, requestedEngine, {
                     topK: requestedHypothesisCount ?? undefined,
+                    researchIntent,
                 });
                 const { brainstormer_output, hypothesis_pipeline_output, critic_output } = mapPythonToFrontend(pythonOutput);
                 const generatedCount = hypothesis_pipeline_output.hypotheses.length;

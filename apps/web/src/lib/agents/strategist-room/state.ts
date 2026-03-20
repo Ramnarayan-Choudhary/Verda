@@ -14,7 +14,7 @@ export function createInitialState(
         document_id: documentId,
         conversation_id: conversationId,
         user_id: userId,
-        hypothesis_engine_preference: 'gpt',
+        hypothesis_engine_preference: 'claude',
         last_hypothesis_engine_used: null,
 
         phase: 'idle',

@@ -34,34 +34,50 @@ class PortfolioConstructor:
         verdicts: dict[str, TribunalVerdict],
         config: PipelineConfig,
     ) -> ResearchPortfolio:
-        # Build ranked list with scores
+        # Build SIMPLIFIED ranked list — avoid sending full verdict/score objects
+        # (which causes the LLM to hallucinate invalid TribunalVerdict literals)
         ranked_data = []
         for h in ranked_hypotheses:
             scores = panel_scores.get(h.id, [])
             composite = compute_panel_composite(scores)
             verdict = verdicts.get(h.id)
+
+            # Extract only simple verdict summary fields
+            verdict_info: dict = {}
+            if verdict:
+                verdict_info = {
+                    "overall": verdict.overall_verdict,
+                    "primary_weakness": verdict.primary_weakness,
+                    "revision_directive": verdict.revision_directive,
+                }
+                if verdict.mechanism_validation:
+                    verdict_info["mechanism_score"] = verdict.mechanism_validation.logical_score
+                if verdict.resource_reality:
+                    verdict_info["feasibility_score"] = verdict.resource_reality.feasibility_score
+
             ranked_data.append({
-                "hypothesis": h.model_dump(),
-                "panel_composite": composite,
-                "verdict_summary": verdict.overall_verdict if verdict else "unknown",
-                "scores_summary": {
+                "id": h.id,
+                "title": h.title,
+                "condition": h.condition,
+                "intervention": h.intervention,
+                "prediction": h.prediction,
+                "mechanism": h.mechanism,
+                "generation_strategy": h.generation_strategy,
+                "falsification_criterion": h.falsification_criterion,
+                "novelty_claim": h.novelty_claim,
+                "panel_composite": round(composite, 1),
+                "verdict": verdict_info,
+                "judge_scores": {
                     js.judge_persona: js.scores.composite for js in scores
                 } if scores else {},
             })
 
         ranked_json = json.dumps(ranked_data, indent=1)
-        scores_json = json.dumps(
-            {hid: [js.model_dump() for js in jsl] for hid, jsl in panel_scores.items()},
-            indent=1,
-        )
-        verdicts_json = json.dumps(
-            {hid: v.model_dump() for hid, v in verdicts.items()},
-            indent=1,
-        )
         config_json = json.dumps(config.model_dump(), indent=1)
 
+        # Pass empty strings for scores/verdicts — they're already embedded in ranked_data
         system, user = portfolio_construction_prompt(
-            ranked_json, scores_json, verdicts_json, config_json
+            ranked_json, "", "", config_json
         )
 
         portfolio = await self._llm.generate_json(

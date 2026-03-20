@@ -2,6 +2,7 @@
 
 Resolves sources -> downloads PDFs -> extracts text -> chunks ->
 per-doc intelligence extraction -> cross-doc landscape synthesis.
+Optionally runs Deep Research Mode for iterative literature search.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ async def run(state: dict[str, Any], llm: LLMProvider, progress: Callable | None
     """Layer 0: Extract intelligence from all input papers."""
 
     arxiv_client = ArxivClient()
+    config = state.get("config")
 
     try:
         # Resolve all paper sources
@@ -67,6 +69,7 @@ async def run(state: dict[str, Any], llm: LLMProvider, progress: Callable | None
             raise ValueError("Could not extract text from any papers")
 
         # Per-doc intelligence extraction (parallel)
+        domain = getattr(config, "domain", "") if config else ""
         extractor = PaperIntelligenceExtractor(llm)
         intelligences = await extractor.extract_batch(papers, max_concurrent=3)
 
@@ -75,7 +78,46 @@ async def run(state: dict[str, Any], llm: LLMProvider, progress: Callable | None
 
         # Cross-doc synthesis
         synthesizer = LandscapeSynthesizer(llm)
-        landscape = await synthesizer.synthesize(intelligences)
+        landscape = await synthesizer.synthesize(intelligences, domain=domain)
+
+        # Deep Research Mode: iterative search-read-refine (SciSpace-inspired)
+        enable_deep_research = getattr(config, "enable_deep_research", False) if config else False
+        if enable_deep_research:
+            from hypo_claude.agents.deep_research import DeepResearchAgent
+
+            deep_rounds = getattr(config, "deep_research_rounds", 3) if config else 3
+            max_papers_per_round = getattr(config, "max_papers_per_round", 10) if config else 10
+            follow_citations = getattr(config, "follow_citations", True) if config else True
+
+            if progress:
+                await progress(
+                    "intelligence",
+                    f"Starting Deep Research Mode ({deep_rounds} rounds)...",
+                    len(arxiv_ids), len(arxiv_ids) + 2,
+                )
+
+            deep_agent = DeepResearchAgent(
+                llm=llm,
+                extractor=extractor,
+                synthesizer=synthesizer,
+                progress_callback=None,  # Use layer-level progress instead
+            )
+
+            intelligences, landscape = await deep_agent.run(
+                initial_intelligences=intelligences,
+                initial_landscape=landscape,
+                rounds=deep_rounds,
+                max_papers_per_round=max_papers_per_round,
+                follow_citations=follow_citations,
+                domain=domain,
+            )
+
+            if progress:
+                await progress(
+                    "intelligence",
+                    f"Deep Research complete: {len(intelligences)} papers analyzed",
+                    len(arxiv_ids) + 1, len(arxiv_ids) + 2,
+                )
 
         if progress:
             await progress("intelligence", "Intelligence extraction complete", len(arxiv_ids) + 1, len(arxiv_ids) + 1)

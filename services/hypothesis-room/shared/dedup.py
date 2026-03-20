@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 
 import numpy as np
 import structlog
@@ -10,6 +12,12 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 _model = None
+
+
+def _stable_bucket(token: str, dim: int) -> int:
+    digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+    value = int.from_bytes(digest, byteorder="big", signed=False)
+    return value % dim
 
 
 def _get_model():
@@ -25,14 +33,29 @@ def _get_model():
 def _fallback_embeddings(texts: list[str]) -> np.ndarray:
     if not texts:
         return np.zeros((0, 384), dtype=np.float32)
-    vectors = np.zeros((len(texts), 384), dtype=np.float32)
+    dim = 384
+    vectors = np.zeros((len(texts), dim), dtype=np.float32)
     for row, text in enumerate(texts):
-        tokens = [t for t in text.lower().split() if t.strip()]
+        tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", text.lower())
         if not tokens:
             continue
+        # Unigram features.
         for token in tokens:
-            bucket = abs(hash(token)) % 384
+            bucket = _stable_bucket(f"u:{token}", dim)
             vectors[row, bucket] += 1.0
+
+        # Bigram features improve separation among similarly-worded candidates.
+        for idx in range(len(tokens) - 1):
+            pair = f"{tokens[idx]}::{tokens[idx + 1]}"
+            bucket = _stable_bucket(f"b:{pair}", dim)
+            vectors[row, bucket] += 0.8
+
+        # Lightweight char n-grams preserve phrase-level differences.
+        compact = re.sub(r"\s+", " ", " ".join(tokens))
+        for idx in range(max(0, len(compact) - 4)):
+            chunk = compact[idx : idx + 5]
+            bucket = _stable_bucket(f"c:{chunk}", dim)
+            vectors[row, bucket] += 0.25
         norm = np.linalg.norm(vectors[row])
         if norm > 0:
             vectors[row] = vectors[row] / norm
@@ -62,6 +85,10 @@ def deduplicate_by_cosine(
     if len(texts) <= 1:
         return texts, list(range(len(texts)))
 
+    use_threshold = threshold
+    if os.environ.get("VREDA_ENABLE_ST_EMBEDDINGS", "0") != "1":
+        use_threshold = min(0.97, threshold + 0.22)
+
     embeddings = compute_embeddings(texts, batch_size=batch_size)
     sim_matrix = embeddings @ embeddings.T
 
@@ -72,11 +99,11 @@ def deduplicate_by_cosine(
             continue
         kept.append(i)
         for j in range(i + 1, len(texts)):
-            if j not in discarded and sim_matrix[i, j] > threshold:
+            if j not in discarded and sim_matrix[i, j] > use_threshold:
                 discarded.add(j)
 
     unique_texts = [texts[i] for i in kept]
-    logger.info("dedup.complete", original=len(texts), unique=len(unique_texts), threshold=threshold)
+    logger.info("dedup.complete", original=len(texts), unique=len(unique_texts), threshold=use_threshold)
     return unique_texts, kept
 
 

@@ -1,4 +1,4 @@
-"""Layer 3 prompts — Adversarial Tribunal (4 critics + mechanism validator)."""
+"""Layer 3 prompts — Adversarial Tribunal (5 critics + mechanism validator) with domain-specific checks."""
 
 from __future__ import annotations
 
@@ -18,11 +18,24 @@ EVALUATE:
 4. specific_concerns: Your most important concern in 2-3 sentences
 
 SCORING GUIDE:
-- 0.0-0.2: Violates fundamental principles (perpetual motion, faster than light)
+- 0.0-0.2: Violates fundamental principles (perpetual motion, faster than light, negative entropy)
 - 0.3-0.4: Plausible but contradicts strong evidence
 - 0.5-0.6: Plausible, some concerns about boundary conditions
 - 0.7-0.8: Well-grounded, minor edge cases to consider
 - 0.9-1.0: Strongly supported by existing theory
+
+DOMAIN-SPECIFIC IMPOSSIBILITY CHECKS:
+- PHYSICS: Conservation of energy/momentum/mass, 2nd law of thermodynamics, speed of light, Heisenberg uncertainty
+- BIOLOGY: Thermodynamic constraints on enzymatic reactions, Anfinsen's dogma limits, no Lamarckian inheritance in standard genetics
+- CHEMISTRY: Orbital symmetry rules, Le Chatelier's principle, thermodynamic feasibility (ΔG)
+- ML/AI: No free lunch theorem, curse of dimensionality, information-theoretic limits (Shannon), computational complexity bounds (P≠NP implications)
+- STATISTICS: Sample size requirements, multiple testing corrections, regression to the mean, ecological fallacy
+
+COMMON SUBTLE VIOLATIONS:
+- Claiming a method achieves information-theoretic bounds without addressing noise floor
+- Assuming linear scaling where power law or logarithmic scaling is expected
+- Confusing sufficient conditions with necessary conditions
+- Extrapolating from low-dimensional intuition to high-dimensional settings
 
 Return valid JSON matching the DomainCritique schema."""
 
@@ -60,6 +73,19 @@ COMMON FLAWS TO CHECK:
 - Baseline too weak (comparing to 2020 methods when 2024 methods exist)
 - Dataset too narrow (single benchmark doesn't generalize)
 
+DOMAIN-SPECIFIC METHODOLOGY PITFALLS:
+- ML: Training/test data leakage, overfitting to validation set during hyperparameter tuning, comparing unfairly across compute budgets, cherry-picking random seeds, batch size confounding learning rate effects
+- BIOLOGY: Lack of biological replicates vs technical replicates, cell line artifacts, antibody specificity issues, survivorship bias in patient cohorts
+- STATISTICS: Multiple comparisons without correction (Bonferroni/FDR), p-hacking through optional stopping, underpowered studies claiming null results, HARKing (Hypothesizing After Results are Known)
+- PHYSICS: Systematic errors masquerading as signal, inadequate error propagation, confirmation bias in data selection, simulation artifacts (mesh dependency, time-step sensitivity)
+
+EXPERIMENTAL DESIGN RED FLAGS:
+- No negative control or null hypothesis test
+- Success metric can be gamed without actually solving the problem
+- "Ablation study" that only removes one component (need to test each independently)
+- Compute comparison is unfair (different model sizes, different data, different training time)
+- Statistical significance not addressed (no confidence intervals, no repeated runs)
+
 Return valid JSON matching the MethodologyCritique schema."""
 
     user = f"""\
@@ -90,6 +116,14 @@ QUALITY BAR:
 - Your strongest_objection must be SPECIFIC and FALSIFIABLE, not vague
 - "This hasn't been tested" is NOT an objection. "Smith et al. 2023 tested exactly this and found the opposite" IS
 - The null hypothesis must be a genuine alternative, not a strawman
+
+DEVASTATING OBJECTION PATTERNS:
+1. "This was already tried and failed": Cite specific prior work that attempted the same approach
+2. "Simpler explanation exists": The observed effect has a known, boring cause (confound, artifact, Occam's razor)
+3. "Mechanism contradicts known result": A specific published result directly contradicts the proposed mechanism
+4. "Scale won't work": Theoretical argument that the effect disappears at larger/smaller scale
+5. "Metric is misleading": The proposed metric doesn't actually measure what they think it measures
+6. "Sample size problem": Effect size is too small to be reliably detected with proposed experiment size
 
 Return valid JSON matching the DevilsAdvocateCritique schema."""
 
@@ -125,6 +159,20 @@ SCORING GUIDE:
 - 0.7-0.8: Straightforward setup, publicly available data
 - 0.9-1.0: Can be done with a laptop and public APIs
 
+REALISTIC COMPUTE ESTIMATES (calibration guide):
+- Training GPT-2 (124M) from scratch: ~4 hours on 1x A100
+- Fine-tuning LLaMA-7B with LoRA: ~2-4 hours on 1x A100
+- Training ResNet-50 on ImageNet: ~12 hours on 1x A100
+- Full NAS search (DARTS): ~1-4 GPU-days
+- Training a diffusion model on CIFAR: ~8 hours on 1x A100
+- If someone claims they can train a 70B model in 8 hours on 1 GPU → IMPOSSIBLE
+
+DATA AVAILABILITY RED FLAGS:
+- "Medical imaging dataset" without naming the specific dataset (many are restricted)
+- "Financial transaction data" → almost always proprietary
+- "Social media data" → often requires API access that's been restricted
+- "Genomic data" → some is public (GEO, ENCODE) but many studies are restricted
+
 Return valid JSON matching the ResourceCritique schema."""
 
     user = f"""\
@@ -134,6 +182,51 @@ HYPOTHESIS:
 {hypothesis_json}
 
 Return a JSON object matching the ResourceCritique schema."""
+
+    return system, user
+
+
+def executability_critic_prompt(hypothesis_json: str) -> tuple[str, str]:
+    system = """\
+You are the EXECUTABILITY CRITIC — a senior engineer who has to turn this into running code.
+
+Your job: Determine if this hypothesis can be implemented END-TO-END with available tools,
+libraries, and infrastructure. A brilliant hypothesis that needs a custom GPU kernel or
+novel distributed training framework is NOT executable.
+
+EVALUATE:
+1. implementation_feasible: Can this be coded in Python with standard ML libraries?
+2. required_libraries: List specific packages needed (torch, transformers, sklearn, etc.)
+3. novel_infra_needed: Does this need infrastructure that doesn't exist? (True/False)
+4. implementation_risk: low | medium | high
+5. exec_score: 0.0 (needs fundamental new tooling) to 1.0 (can implement with pip install)
+6. blocking_issues: What makes this impossible to implement?
+
+SCORING GUIDE:
+- 0.0-0.2: Needs novel infrastructure, custom hardware, or missing libraries
+- 0.3-0.4: Needs significant engineering (custom training loops, distributed systems)
+- 0.5-0.6: Standard ML stack but complex integration
+- 0.7-0.8: Well-supported by existing tools, some configuration needed
+- 0.9-1.0: Off-the-shelf implementation, minor scripting
+
+KEY CHECK: If novel_infra_needed=True, exec_score MUST be <= 0.4.
+
+IMPLEMENTATION COMPLEXITY GUIDE:
+- pip install + 50 lines of code → exec_score 0.9+
+- Custom dataset loader + standard training loop → exec_score 0.7-0.8
+- Custom loss function + modified model architecture → exec_score 0.5-0.7
+- Custom CUDA kernel or distributed training → exec_score 0.2-0.4
+- Novel hardware or OS-level changes → exec_score 0.0-0.2
+
+Return valid JSON matching the ExecutabilityCritique schema."""
+
+    user = f"""\
+Assess the implementation executability of this hypothesis:
+
+HYPOTHESIS:
+{hypothesis_json}
+
+Return a JSON object matching the ExecutabilityCritique schema."""
 
     return system, user
 
@@ -156,6 +249,15 @@ COMMON MECHANISM FLAWS:
 - Missing intermediate steps (A → ? → C)
 - Circular reasoning (X works because X is effective)
 - Confusing necessity with sufficiency
+- "Because it regularizes" — HOW does it regularize? What specific inductive bias?
+- "Because the model learns better representations" — WHAT makes them better? Measured how?
+
+LOGICAL VALIDITY CHECKLIST:
+1. Does the intervention NECESSARILY lead to the intermediate step? (or just possibly?)
+2. Does the intermediate step NECESSARILY lead to the outcome? (or just possibly?)
+3. Are there plausible alternative paths from intervention to outcome?
+4. Could the outcome happen WITHOUT the proposed intermediate step?
+5. Does the mechanism make predictions beyond the stated outcome?
 
 Return valid JSON matching the MechanismValidation schema."""
 
@@ -176,16 +278,17 @@ def tribunal_synthesis_prompt(
     methodology_json: str,
     devils_advocate_json: str,
     resource_json: str,
+    executability_json: str,
     mechanism_json: str,
 ) -> tuple[str, str]:
     """Synthesize all critiques into a TribunalVerdict."""
     system = """\
-You are the TRIBUNAL CHAIR. Synthesize the 4 critic reports and mechanism validation
+You are the TRIBUNAL CHAIR. Synthesize the 5 critic reports and mechanism validation
 into a final verdict.
 
 VERDICT OPTIONS:
 - "advance": Pass to evaluation. Requires: domain_validity_score >= 0.5 AND feasibility_score >= 0.3
-  AND logical_score >= 0.4 AND no fundamental principle violations
+  AND logical_score >= 0.4 AND exec_score >= 0.3 AND no fundamental principle violations
 - "revise": Has potential but needs specific improvements. You MUST provide a revision_directive.
 - "abandon": Fatally flawed — violates known principles, impossible to test, or mechanism is broken.
 
@@ -193,6 +296,14 @@ For "revise" verdicts, the revision_directive must be SPECIFIC and ACTIONABLE:
 BAD: "improve the mechanism"
 GOOD: "The causal chain is missing the step between feature extraction and classification gain.
        Specify whether the improvement comes from better representations or reduced noise."
+
+WEIGHTING GUIDE (how much each critic's opinion matters):
+- Domain critic: HIGHEST weight — if domain says impossible, verdict is "abandon" regardless
+- Mechanism validator: HIGH weight — broken mechanism → "revise" even if everything else is good
+- Methodology critic: HIGH weight — bad experiment design wastes resources
+- Devil's advocate: MEDIUM weight — strong objection downgrades but doesn't auto-abandon
+- Resource realist: MEDIUM weight — infeasible but fixable → "revise"
+- Executability: LOWER weight — implementation difficulty can often be worked around
 
 Return valid JSON matching the TribunalVerdict schema."""
 
@@ -213,6 +324,9 @@ DEVIL'S ADVOCATE:
 
 RESOURCE REALITY:
 {resource_json}
+
+EXECUTABILITY:
+{executability_json}
 
 MECHANISM VALIDATION:
 {mechanism_json}
@@ -242,6 +356,14 @@ RULES:
 3. Preserve what's GOOD about the original hypothesis
 4. The evolved hypothesis must be MORE specific, not less
 5. Keep the same generation_strategy as the original
+6. The evolved mechanism must have MORE detail than the original (longer intermediate, more conditions)
+7. If the tribunal flagged missing baselines, ADD specific named baselines
+8. If the tribunal flagged vague falsification, ADD numeric thresholds
+
+EVOLUTION QUALITY BAR:
+- The evolved hypothesis should score HIGHER on the specific dimension flagged by the tribunal
+- Do NOT simply add qualifiers like "under certain conditions" — be MORE specific about WHICH conditions
+- Do NOT dilute the claim — SHARPEN it by narrowing the scope to where it definitely holds
 
 Return valid JSON matching the StructuredHypothesis schema."""
 

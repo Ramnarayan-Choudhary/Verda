@@ -11,7 +11,7 @@ State-of-the-art hypothesis generation pipeline (LangGraph + multi-agent debate)
 - **Server**: FastAPI endpoint `/generate` streams NDJSON progress events; `vreda_hypothesis.server:main` boots uvicorn.
 
 ## Quickstart
-1. `cp .env.example .env` and fill in real keys (see `CONFIG_SETUP.md` + `LLM_PROVIDERS.md`).
+1. Use the monorepo root env files only: `cp ../../.env.example ../../.env.local` and fill real keys.
 2. For stable runs, keep `LLM_FORCE_OPENAI_ONLY=true` so all agent roles use `OPENAI_MODEL` (`gpt-4o` by default).
 3. Install dependencies: `pip install -e .[dev]`.
 4. Run tests: `pytest`.

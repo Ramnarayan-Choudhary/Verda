@@ -36,8 +36,8 @@ export const PaperAnalysisSchema = z.object({
 
     metrics: z.array(z.object({
         name: z.string(),
-        value: z.string(),
-        comparison: z.string(),
+        value: z.string().nullable().default(''),
+        comparison: z.string().nullable().default(''),
     })).default([]),
 
     key_claims: z.array(z.string()).default([]),
@@ -82,7 +82,7 @@ export const CodePathSchema = z.object({
     formula_to_code_gap: z.object({
         algorithms_to_implement: z.array(z.object({
             name: z.string(),
-            equation_ref: z.string(),
+            equation_ref: z.string().nullable().default(''),
             complexity: z.enum(['low', 'medium', 'high']).default('medium'),
             suggested_library: z.string(),
             estimated_loc: z.number().default(0),

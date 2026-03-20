@@ -77,7 +77,7 @@ class TestDimensionScores:
             impact=50, feasibility=90, specificity=40, creativity=30,
         )
         composite = ds.composite
-        expected = (80 * 0.25 + 70 * 0.20 + 60 * 0.20 + 50 * 0.15 + 90 * 0.10 + 40 * 0.05 + 30 * 0.05)
+        expected = (80 * 0.20 + 70 * 0.15 + 60 * 0.20 + 50 * 0.10 + 90 * 0.20 + 40 * 0.10 + 30 * 0.05)
         assert abs(composite - round(expected, 1)) < 0.1
 
     def test_weights_sum_to_one(self):

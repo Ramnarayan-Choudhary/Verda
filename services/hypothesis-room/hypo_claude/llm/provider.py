@@ -2,7 +2,9 @@
 Tiered LLM Provider — role-based model routing for the Epistemic Engine.
 
 19 agent roles mapped to 3 tiers (REASONING, CREATIVE, FAST).
-Uses OpenAI API via langchain-openai. Designed for easy provider switching.
+Uses OpenAI API via langchain-openai for REASONING/CREATIVE tiers.
+Uses Google Gemini via google-genai for FAST tier (cheaper, faster extraction).
+Designed for easy provider switching.
 """
 
 from __future__ import annotations
@@ -21,6 +23,24 @@ from hypo_claude.config import settings
 from hypo_claude.models import TokenUsage
 
 logger = structlog.get_logger(__name__)
+
+# Lazy import for Gemini — only loaded if GEMINI_API_KEY is set
+_gemini_client = None
+
+
+def _get_gemini_client():
+    """Lazy-initialize the Gemini client."""
+    global _gemini_client
+    if _gemini_client is None and settings.gemini.api_key:
+        try:
+            from google import genai
+            _gemini_client = genai.Client(api_key=settings.gemini.api_key)
+            logger.info("gemini.initialized", model=settings.gemini.fast_model)
+        except ImportError:
+            logger.warning("gemini.import_failed", msg="google-genai not installed, falling back to OpenAI for FAST tier")
+        except Exception as exc:
+            logger.warning("gemini.init_failed", error=str(exc)[:200])
+    return _gemini_client
 
 
 _NON_RETRYABLE_ERROR_NAMES = {
@@ -98,18 +118,16 @@ class AgentRole(str, Enum):
 
 
 _ROLE_TIER: dict[AgentRole, str] = {
-    # Reasoning
+    # Reasoning (OpenAI gpt-4o) — deep analytical thinking
     AgentRole.DOMAIN_CRITIC: "reasoning",
     AgentRole.METHODOLOGY_CRITIC: "reasoning",
     AgentRole.DEVILS_ADVOCATE: "reasoning",
-    AgentRole.RESOURCE_CRITIC: "reasoning",
     AgentRole.MECHANISM_VALIDATOR: "reasoning",
     AgentRole.CONSERVATIVE_JUDGE: "reasoning",
     AgentRole.GENERALIST_JUDGE: "reasoning",
     AgentRole.PRACTITIONER_JUDGE: "reasoning",
-    AgentRole.GAP_ANALYST: "reasoning",
     AgentRole.LANDSCAPE_SYNTHESIZER: "reasoning",
-    # Creative
+    # Creative (OpenAI gpt-4o) — divergent thinking + novelty
     AgentRole.ASSUMPTION_CHALLENGER: "creative",
     AgentRole.DOMAIN_BRIDGE: "creative",
     AgentRole.CONTRADICTION_RESOLVER: "creative",
@@ -118,8 +136,10 @@ _ROLE_TIER: dict[AgentRole, str] = {
     AgentRole.SYNTHESIS_CATALYST: "creative",
     AgentRole.FALSIFICATION_DESIGNER: "creative",
     AgentRole.EVOLVER: "creative",
-    AgentRole.PORTFOLIO_CONSTRUCTOR: "creative",
-    # Fast
+    # Fast (Gemini 2.5 Flash) — structured evaluation, extraction, serialization
+    AgentRole.RESOURCE_CRITIC: "fast",
+    AgentRole.GAP_ANALYST: "fast",
+    AgentRole.PORTFOLIO_CONSTRUCTOR: "fast",
     AgentRole.PAPER_EXTRACTOR: "fast",
     AgentRole.OUTPUT_SERIALIZER: "fast",
     # Universal
@@ -130,10 +150,11 @@ _ROLE_TIER: dict[AgentRole, str] = {
 class _ProviderSlot:
     """A configured LLM client with metadata."""
 
-    def __init__(self, client: ChatOpenAI, name: str, model: str) -> None:
-        self.client = client
+    def __init__(self, client: ChatOpenAI | None, name: str, model: str, *, provider_type: str = "openai") -> None:
+        self.client = client  # None for Gemini (uses google-genai directly)
         self.name = name
         self.model = model
+        self.provider_type = provider_type  # "openai" or "gemini"
 
 
 class LLMProvider:
@@ -144,6 +165,18 @@ class LLMProvider:
         text = await llm.generate("System", "User", role=AgentRole.DOMAIN_CRITIC)
         obj = await llm.generate_json("System", "User", MyModel, role=AgentRole.EVOLVER)
     """
+
+    # Global semaphore shared across all instances to prevent rate limiting
+    _MAX_CONCURRENT_CALLS = 3  # Balanced — fast enough without hitting rate limits
+    _semaphore_map: dict[int, asyncio.Semaphore] = {}  # keyed by event loop id
+
+    @classmethod
+    def _get_semaphore(cls) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        loop_id = id(loop)
+        if loop_id not in cls._semaphore_map:
+            cls._semaphore_map[loop_id] = asyncio.Semaphore(cls._MAX_CONCURRENT_CALLS)
+        return cls._semaphore_map[loop_id]
 
     def __init__(self) -> None:
         self.token_usage = TokenUsage()
@@ -184,6 +217,31 @@ class LLMProvider:
                 name=f"OpenAI/{settings.openai.creative_model}",
                 model=settings.openai.creative_model,
             )
+
+        # Use Gemini for FAST tier if available (cheaper + faster for extraction)
+        if settings.gemini.api_key and _get_gemini_client() is not None:
+            self._providers["fast"] = _ProviderSlot(
+                client=None,  # Gemini uses google-genai directly, not langchain
+                name=f"Gemini/{settings.gemini.fast_model}",
+                model=settings.gemini.fast_model,
+                provider_type="gemini",
+            )
+            # Also register OpenAI as fallback for when Gemini quota/rate-limit hits
+            if settings.openai.api_key:
+                self._providers["_openai_fast_fallback"] = _ProviderSlot(
+                    client=ChatOpenAI(
+                        api_key=settings.openai.api_key, base_url=settings.openai.base_url,
+                        model=settings.openai.fast_model,
+                        model_kwargs={"response_format": {"type": "json_object"}},
+                        **runtime_kwargs,
+                    ),
+                    name=f"OpenAI/{settings.openai.fast_model}",
+                    model=settings.openai.fast_model,
+                )
+        elif settings.openai.api_key:
+            # Fallback: use OpenAI for FAST tier if Gemini unavailable
+            base = settings.openai.base_url
+            key = settings.openai.api_key
             self._providers["fast"] = _ProviderSlot(
                 client=ChatOpenAI(
                     api_key=key, base_url=base,
@@ -197,7 +255,7 @@ class LLMProvider:
 
         if not self._providers:
             raise RuntimeError(
-                "No LLM provider configured. Set OPENAI_API_KEY in your .env file."
+                "No LLM provider configured. Set OPENAI_API_KEY or GEMINI_API_KEY in root .env.local."
             )
 
     def _build_tier_map(self) -> dict[str, str]:
@@ -307,12 +365,30 @@ class LLMProvider:
         return report
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=3, min=5, max=60),
         retry=retry_if_exception(_should_retry_exception),
     )
     async def _call(self, provider: _ProviderSlot, system: str, user: str, temperature: float) -> str:
+        semaphore = self._get_semaphore()
+        async with semaphore:
+            return await self._call_inner(provider, system, user, temperature)
+
+    async def _call_inner(self, provider: _ProviderSlot, system: str, user: str, temperature: float) -> str:
         logger.debug("llm.call", provider=provider.name, model=provider.model)
+
+        if provider.provider_type == "gemini":
+            try:
+                return await self._call_gemini(provider, system, user, temperature)
+            except Exception as exc:
+                # Fallback to OpenAI FAST tier if Gemini fails (quota, network, etc.)
+                openai_fast = self._providers.get("_openai_fast_fallback")
+                if openai_fast is None:
+                    logger.warning("llm.gemini_failed_no_fallback", error=str(exc)[:200])
+                    raise
+                logger.warning("llm.gemini_fallback_to_openai", error=str(exc)[:200])
+                return await self._call_inner(openai_fast, system, user, temperature)
+
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -340,6 +416,48 @@ class LLMProvider:
         logger.debug("llm.done", provider=provider.name, chars=len(content))
         return content
 
+    async def _call_gemini(self, provider: _ProviderSlot, system: str, user: str, temperature: float) -> str:
+        """Call Google Gemini API via google-genai SDK."""
+        client = _get_gemini_client()
+        if client is None:
+            raise RuntimeError("Gemini client not initialized")
+
+        from google.genai import types
+
+        combined_prompt = f"{system}\n\n---\n\n{user}"
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            response_mime_type="application/json",
+        )
+
+        loop = asyncio.get_running_loop()
+        try:
+            response = await loop.run_in_executor(
+                None,
+                lambda: client.models.generate_content(
+                    model=provider.model,
+                    contents=combined_prompt,
+                    config=config,
+                ),
+            )
+        except Exception as exc:
+            if _is_non_retryable_exception(exc):
+                detail = _format_non_retryable_error(exc, provider.name, provider.model)
+                logger.error("llm.gemini_non_retryable", error=str(exc)[:400])
+                raise RuntimeError(detail) from exc
+            raise
+
+        content = response.text or ""
+
+        # Track token usage (Gemini provides usage_metadata)
+        prompt_t = getattr(response.usage_metadata, "prompt_token_count", 0) or (len(system) + len(user)) // 4
+        comp_t = getattr(response.usage_metadata, "candidates_token_count", 0) or len(content) // 4
+        cost = _estimate_cost(provider.model, prompt_t, comp_t)
+        self.token_usage.add(prompt=prompt_t, completion=comp_t, cost=cost)
+
+        logger.debug("llm.gemini_done", model=provider.model, chars=len(content))
+        return content
+
     @staticmethod
     def _extract_usage(response, system: str, user: str, content: str) -> tuple[int, int]:
         if hasattr(response, "usage_metadata") and response.usage_metadata:
@@ -357,11 +475,16 @@ class LLMProvider:
 
 
 _MODEL_COSTS: dict[str, tuple[float, float]] = {
+    # OpenAI models (per 1M tokens: prompt, completion)
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "o3-mini": (1.10, 4.40),
+    # Gemini models (per 1M tokens: prompt, completion)
+    "gemini-2.0-flash": (0.10, 0.40),
+    "gemini-1.5-pro": (1.25, 5.00),
+    "gemini-1.5-flash": (0.075, 0.30),
 }
 
 _DEFAULT_COST = (2.50, 10.00)

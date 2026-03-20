@@ -76,7 +76,7 @@ ANTHROPIC_API_KEY=your-openrouter-key-for-claude
 
 ## How to Add a New Provider
 
-1. Add env vars to `.env`:
+1. Add env vars to root `.env.local`:
    ```env
    DEEPSEEK_API_KEY=your-key
    # DEEPSEEK_BASE_URL and DEEPSEEK_MODEL have sane defaults

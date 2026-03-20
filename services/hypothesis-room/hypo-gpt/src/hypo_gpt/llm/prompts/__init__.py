@@ -1,4 +1,4 @@
-"""Prompt placeholders for the GPT engine layers."""
+"""Prompt registry for GPT engine layers."""
 
 from hypo_gpt.llm.prompts.cartography import CARTOGRAPHY_PROMPT
 from hypo_gpt.llm.prompts.intelligence import INTELLIGENCE_PROMPT

@@ -1,138 +1,142 @@
 from __future__ import annotations
 
 import re
+from statistics import mean, pvariance
 
-from hypo_gpt.models import DimensionScores, StructuredHypothesis
+from hypo_gpt.models import DimensionScores, HypothesisV2, JudgeScore, PanelVerdict, StructuredHypothesis
 
 
-def _clip(value: float) -> float:
-    return round(max(0.0, min(10.0, value)), 2)
+def _clip01(value: float) -> float:
+    return max(0.0, min(1.0, round(value, 4)))
+
+
+def _clip10(value: float) -> float:
+    return max(0.0, min(10.0, round(value, 2)))
 
 
 def _has_number(text: str) -> bool:
     return bool(re.search(r"\d", text))
 
 
-def _parse_compute_intensity(compute: str) -> float:
-    lower = compute.lower()
-    if "16x" in lower:
-        return 0.9
-    if "8x" in lower:
-        return 0.7
-    if "4x" in lower:
-        return 0.45
-    if "2x" in lower:
-        return 0.3
-    return 0.5
+def _base_dimensions(hypothesis: HypothesisV2) -> tuple[float, float, float, float, float]:
+    novelty = 0.52 + (0.18 if hypothesis.strategy in {"cross_domain", "constraint_relax", "method_recomb"} else 0.08)
+    feasibility = 0.62 + (0.08 if "public" in hypothesis.experiment.required_data.lower() else -0.12)
+    mechanism = 0.55 + (0.18 if len(hypothesis.causal_chain.intermediate.split()) >= 18 else 0.05)
+    executability = 0.58 + (0.12 if _has_number(hypothesis.falsification_criterion) else -0.08)
+    importance = 0.54 + (0.12 if "deployment" in hypothesis.problem_being_solved.lower() else 0.05)
+    return (_clip01(novelty), _clip01(feasibility), _clip01(mechanism), _clip01(executability), _clip01(importance))
 
 
 class PanelJudge:
-    """Scores hypotheses using 3 perspectives and returns aggregated scores."""
+    """3-judge dimensional panel with variance aggregation."""
+
+    def evaluate_panel(self, hypothesis: HypothesisV2, risk_appetite: str = "balanced") -> PanelVerdict:
+        novelty, feasibility, mechanism, executability, importance = _base_dimensions(hypothesis)
+
+        conservative = JudgeScore(
+            judge_id="conservative",
+            novelty=_clip01(novelty - 0.08),
+            feasibility=_clip01(feasibility + 0.10),
+            mechanism_coherence=_clip01(mechanism + 0.05),
+            executability=_clip01(executability + 0.07),
+            strategic_importance=_clip01(importance - 0.02),
+            reasoning={
+                "novelty": "Discounted for risk-sensitive posture.",
+                "feasibility": "Prioritizes practical reproducibility.",
+            },
+        )
+
+        generalist = JudgeScore(
+            judge_id="generalist",
+            novelty=_clip01(novelty + 0.05),
+            feasibility=_clip01(feasibility),
+            mechanism_coherence=_clip01(mechanism),
+            executability=_clip01(executability),
+            strategic_importance=_clip01(importance + 0.08),
+            reasoning={
+                "novelty": "Rewards conceptual breadth.",
+                "importance": "Values field-level relevance.",
+            },
+        )
+
+        practitioner = JudgeScore(
+            judge_id="practitioner",
+            novelty=_clip01(novelty - 0.02),
+            feasibility=_clip01(feasibility + 0.06),
+            mechanism_coherence=_clip01(mechanism - 0.01),
+            executability=_clip01(executability + 0.09),
+            strategic_importance=_clip01(importance + 0.03),
+            reasoning={
+                "executability": "Emphasizes implementation realism.",
+                "feasibility": "Prefers bounded compute/data requirements.",
+            },
+        )
+
+        scores = [conservative, generalist, practitioner]
+        novelty_vals = [score.novelty for score in scores]
+        feasibility_vals = [score.feasibility for score in scores]
+        coherence_vals = [score.mechanism_coherence for score in scores]
+        executability_vals = [score.executability for score in scores]
+        importance_vals = [score.strategic_importance for score in scores]
+
+        verdict = PanelVerdict(
+            hypo_id=hypothesis.hypo_id,
+            scores=scores,
+            novelty_mean=_clip01(mean(novelty_vals)),
+            novelty_var=round(pvariance(novelty_vals), 6),
+            feasibility_mean=_clip01(mean(feasibility_vals)),
+            feasibility_var=round(pvariance(feasibility_vals), 6),
+            coherence_mean=_clip01(mean(coherence_vals)),
+            coherence_var=round(pvariance(coherence_vals), 6),
+            executability_mean=_clip01(mean(executability_vals)),
+            executability_var=round(pvariance(executability_vals), 6),
+            importance_mean=_clip01(mean(importance_vals)),
+            importance_var=round(pvariance(importance_vals), 6),
+            controversy_score=round(
+                mean(
+                    [
+                        pvariance(novelty_vals),
+                        pvariance(feasibility_vals),
+                        pvariance(coherence_vals),
+                        pvariance(executability_vals),
+                        pvariance(importance_vals),
+                    ]
+                ),
+                6,
+            ),
+            panel_composite=0.0,
+        )
+        verdict.panel_composite = self.compute_panel_composite(verdict, risk_appetite=risk_appetite)
+        return verdict
+
+    @staticmethod
+    def compute_panel_composite(verdict: PanelVerdict, risk_appetite: str) -> float:
+        weights = {
+            "conservative": dict(n=0.20, f=0.35, m=0.25, e=0.20, i=0.00),
+            "balanced": dict(n=0.25, f=0.25, m=0.25, e=0.15, i=0.10),
+            "moonshot": dict(n=0.40, f=0.10, m=0.20, e=0.10, i=0.20),
+        }
+        chosen = weights.get(risk_appetite, weights["balanced"])
+        score = (
+            (chosen["n"] * verdict.novelty_mean)
+            + (chosen["f"] * verdict.feasibility_mean)
+            + (chosen["m"] * verdict.coherence_mean)
+            + (chosen["e"] * verdict.executability_mean)
+            + (chosen["i"] * verdict.importance_mean)
+        )
+        return _clip01(score)
 
     def score(self, hypothesis: StructuredHypothesis) -> DimensionScores:
-        mechanism_words = len(hypothesis.mechanism.split())
-        mechanism_quality = 5.6 + min(2.6, mechanism_words / 12.0)
-        if "causal" in hypothesis.mechanism.lower():
-            mechanism_quality += 0.6
-        if "ablation" in hypothesis.falsification_criterion.lower():
-            mechanism_quality += 0.3
-
-        novelty = 5.8
-        if hypothesis.generation_strategy in {"domain_bridge", "constraint_relaxer", "synthesis_catalyst"}:
-            novelty += 1.6
-        if hypothesis.generation_strategy in {"contradiction_resolver", "falsification_designer"}:
-            novelty += 1.2
-        novelty += min(1.0, len(hypothesis.novelty_claim.split()) / 24.0)
-
-        testability = 5.4
-        if _has_number(hypothesis.prediction):
-            testability += 1.4
-        if _has_number(hypothesis.minimum_viable_test.success_threshold):
-            testability += 1.0
-        if hypothesis.minimum_viable_test.dataset:
-            testability += 0.7
-        if "reject" in hypothesis.falsification_criterion.lower() or "fail" in hypothesis.falsification_criterion.lower():
-            testability += 0.6
-
-        impact = 5.7
-        for token in ("robust", "deployment", "generaliz", "safety", "efficien"):
-            if token in f"{hypothesis.intervention} {hypothesis.prediction}".lower():
-                impact += 0.4
-
-        compute_intensity = _parse_compute_intensity(hypothesis.minimum_viable_test.estimated_compute)
-        feasibility = 8.2 - (compute_intensity * 2.0)
-        if "weeks" in hypothesis.minimum_viable_test.estimated_timeline.lower():
-            feasibility += 0.2
-
-        specificity = 5.8
-        if _has_number(hypothesis.prediction):
-            specificity += 0.8
-        if len(hypothesis.intervention.split()) >= 18:
-            specificity += 0.8
-        if len(hypothesis.minimum_viable_test.baseline.split()) >= 6:
-            specificity += 0.6
-
-        creativity = 5.4
-        if hypothesis.generation_strategy in {"domain_bridge", "synthesis_catalyst"}:
-            creativity += 2.2
-        elif hypothesis.generation_strategy in {"constraint_relaxer", "assumption_challenger"}:
-            creativity += 1.5
-        creativity += min(0.8, len(hypothesis.title.split()) / 16.0)
-
-        if hypothesis.generation_strategy == "falsification_designer":
-            testability += 0.9
-            specificity += 0.7
-            novelty += 0.4
-        elif hypothesis.generation_strategy == "domain_bridge":
-            creativity += 0.9
-            feasibility -= 0.6
-            impact += 0.4
-        elif hypothesis.generation_strategy == "constraint_relaxer":
-            novelty += 0.7
-            feasibility -= 0.4
-        elif hypothesis.generation_strategy == "assumption_challenger":
-            feasibility += 0.4
-            testability += 0.3
-
-        conservative = {
-            "mechanistic_quality": mechanism_quality,
-            "novelty": novelty - 0.5,
-            "testability": testability + 0.2,
-            "scientific_impact": impact - 0.2,
-            "feasibility": feasibility + 0.3,
-            "specificity": specificity + 0.2,
-            "creativity": creativity - 0.6,
-        }
-        generalist = {
-            "mechanistic_quality": mechanism_quality + 0.3,
-            "novelty": novelty + 0.2,
-            "testability": testability,
-            "scientific_impact": impact + 0.4,
-            "feasibility": feasibility - 0.2,
-            "specificity": specificity,
-            "creativity": creativity + 0.4,
-        }
-        practitioner = {
-            "mechanistic_quality": mechanism_quality - 0.1,
-            "novelty": novelty - 0.1,
-            "testability": testability + 0.5,
-            "scientific_impact": impact,
-            "feasibility": feasibility + 0.1,
-            "specificity": specificity + 0.3,
-            "creativity": creativity,
-        }
-
-        def avg(key: str) -> float:
-            return _clip((conservative[key] + generalist[key] + practitioner[key]) / 3)
-
+        v2 = HypothesisV2.from_structured(hypothesis)
+        verdict = self.evaluate_panel(v2)
         return DimensionScores(
-            mechanistic_quality=avg("mechanistic_quality"),
-            novelty=avg("novelty"),
-            testability=avg("testability"),
-            scientific_impact=avg("scientific_impact"),
-            feasibility=avg("feasibility"),
-            specificity=avg("specificity"),
-            creativity=avg("creativity"),
+            mechanistic_quality=_clip10(verdict.coherence_mean * 10),
+            novelty=_clip10(verdict.novelty_mean * 10),
+            testability=_clip10(verdict.executability_mean * 10),
+            scientific_impact=_clip10(verdict.importance_mean * 10),
+            feasibility=_clip10(verdict.feasibility_mean * 10),
+            specificity=_clip10((0.6 * verdict.executability_mean + 0.4 * verdict.coherence_mean) * 10),
+            creativity=_clip10((0.7 * verdict.novelty_mean + 0.3 * verdict.importance_mean) * 10),
         )
 
     @staticmethod

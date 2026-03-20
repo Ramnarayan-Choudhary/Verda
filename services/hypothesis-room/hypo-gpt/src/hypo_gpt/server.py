@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 
 from hypo_gpt.config import settings
 from hypo_gpt.llm import LLMProvider
-from hypo_gpt.models import GenerateRequest, ProgressEvent
+from hypo_gpt.models import GenerateRequest, PipelineConfig, ProgressEvent
 from hypo_gpt.pipeline import HypothesisPipeline
 
 logger = structlog.get_logger(__name__)
@@ -31,16 +31,32 @@ app = FastAPI(
 @app.get("/healthz")
 async def healthcheck() -> dict:
     llm = LLMProvider()
+    defaults = PipelineConfig()
     return {
         "status": "ok",
         "engine": "gpt",
         "active_providers": llm.get_active_provider(),
+        "pipeline_defaults": {
+            "pipeline_version": defaults.pipeline_version,
+            "output_schema": defaults.output_schema,
+            "risk_appetite": defaults.risk_appetite,
+            "max_rounds": defaults.max_rounds,
+            "enable_memory": defaults.enable_memory,
+            "enable_external_search": defaults.enable_external_search,
+        },
+        "grounding_providers": {
+            "openai_web_search": bool(settings.openai.api_key),
+            "tavily": bool(os.environ.get("TAVILY_API_KEY", "")),
+            "semantic_scholar": True,
+        },
         "runtime": {
             "module_file": str(Path(__file__).resolve()),
             "cwd": os.getcwd(),
             "pid": os.getpid(),
             "started_at_epoch_s": SERVER_STARTED_AT_EPOCH_S,
             "health_protocol_version": 3,
+            "external_grounding_timeout_s": settings.runtime.external_grounding_timeout_s,
+            "external_grounding_max_docs": settings.runtime.external_grounding_max_docs,
         },
     }
 

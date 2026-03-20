@@ -23,8 +23,8 @@ class PaperIntelligenceExtractor:
     def __init__(self, llm: LLMProvider) -> None:
         self._llm = llm
 
-    async def extract(self, paper_text: str, paper_id: str = "") -> PaperIntelligence:
-        system, user = paper_intelligence_prompt(paper_text)
+    async def extract(self, paper_text: str, paper_id: str = "", domain: str = "") -> PaperIntelligence:
+        system, user = paper_intelligence_prompt(paper_text, domain=domain)
         result = await self._llm.generate_json(
             system, user,
             model_class=PaperIntelligence,
@@ -33,6 +33,17 @@ class PaperIntelligenceExtractor:
         )
         if paper_id:
             result.paper_id = paper_id  # type: ignore[union-attr]
+        # Fallback: extract title from paper text if LLM returned garbage
+        _garbage_titles = {"", "PaperIntelligence", "paper_intelligence", "Unknown", "N/A", "null", "None"}
+        if not result.title or result.title.strip() in _garbage_titles:  # type: ignore[union-attr]
+            first_lines = paper_text.strip().split("\n")
+            for line in first_lines[:5]:
+                line = line.strip()
+                if len(line) > 10 and not line.startswith(("arXiv", "http", "doi", "Abstract")):
+                    result.title = line[:200]  # type: ignore[union-attr]
+                    break
+            if not result.title:  # type: ignore[union-attr]
+                result.title = f"Paper {paper_id or 'unknown'}"  # type: ignore[union-attr]
         logger.info("extractor.paper_done", paper_id=paper_id, title=result.title[:60])  # type: ignore[union-attr]
         return result  # type: ignore[return-value]
 
@@ -61,10 +72,13 @@ class LandscapeSynthesizer:
     def __init__(self, llm: LLMProvider) -> None:
         self._llm = llm
 
-    async def synthesize(self, intelligences: list[PaperIntelligence]) -> ResearchLandscape:
+    async def synthesize(self, intelligences: list[PaperIntelligence], domain: str = "") -> ResearchLandscape:
         intel_data = [i.model_dump() for i in intelligences]
         intel_json = json.dumps(intel_data, indent=1)
-        system, user = landscape_synthesis_prompt(intel_json, len(intelligences))
+        # Infer domain from first paper if not provided
+        if not domain and intelligences:
+            domain = intelligences[0].domain or ""
+        system, user = landscape_synthesis_prompt(intel_json, len(intelligences), domain=domain)
 
         result = await self._llm.generate_json(
             system, user,

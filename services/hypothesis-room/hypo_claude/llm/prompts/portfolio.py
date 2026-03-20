@@ -47,20 +47,25 @@ Also provide:
 
 Return valid JSON matching the ResearchPortfolio schema."""
 
+    extra_sections = ""
+    if panel_scores_json and panel_scores_json.strip() not in ("", "{}"):
+        extra_sections += f"\n\nPANEL SCORES:\n{panel_scores_json[:4000]}"
+    if verdicts_json and verdicts_json.strip() not in ("", "{}"):
+        extra_sections += f"\n\nTRIBUNAL VERDICTS:\n{verdicts_json[:4000]}"
+
     user = f"""\
 Construct a strategic research portfolio from these ranked hypotheses.
+Each hypothesis already includes its panel_composite score, verdict summary, and judge scores.
 
 RANKED HYPOTHESES (by panel composite score):
 {ranked_hypotheses_json}
-
-PANEL SCORES:
-{panel_scores_json[:4000]}
-
-TRIBUNAL VERDICTS:
-{verdicts_json[:4000]}
+{extra_sections}
 
 PIPELINE CONFIG:
 {config_json}
+
+IMPORTANT: For each hypothesis in the portfolio, copy the EXACT hypothesis object from the input.
+Do NOT invent or regenerate any hypothesis fields. Use the hypothesis objects as-is.
 
 Return a JSON object matching the ResearchPortfolio schema."""
 

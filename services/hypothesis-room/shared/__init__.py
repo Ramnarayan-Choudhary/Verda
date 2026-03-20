@@ -2,6 +2,15 @@
 
 from shared.cache import AsyncTTLCache, paper_cache, search_cache
 from shared.dedup import cosine_similarity, deduplicate_by_cosine
+from shared.embedding import embed, embed_many
+from shared.llm_provider import (
+    LLMConfig,
+    LLMParseError,
+    LLMProvider,
+    LLMProviderError,
+    LLMRequestError,
+)
+from shared.memory_store import HypothesisMemoryStore
 from shared.pdf import chunk_text, download_arxiv_pdf, extract_text
 from shared.rate_limiter import (
     AsyncRateLimiter,
@@ -10,6 +19,7 @@ from shared.rate_limiter import (
     semantic_scholar_limiter,
     web_search_limiter,
 )
+from shared.serialization import deserialize_tree, serialize, serialize_flow
 from shared.vector_store import VectorStoreClient
 
 __all__ = [
@@ -21,6 +31,17 @@ __all__ = [
     "chunk_text",
     "deduplicate_by_cosine",
     "cosine_similarity",
+    "embed",
+    "embed_many",
+    "serialize",
+    "deserialize_tree",
+    "serialize_flow",
+    "LLMConfig",
+    "LLMProvider",
+    "LLMProviderError",
+    "LLMRequestError",
+    "LLMParseError",
+    "HypothesisMemoryStore",
     "paper_cache",
     "search_cache",
     "arxiv_limiter",

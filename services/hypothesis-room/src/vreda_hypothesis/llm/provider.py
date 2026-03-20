@@ -253,7 +253,7 @@ class LLMProvider:
 
         if not self._providers:
             raise RuntimeError(
-                "No LLM provider configured. Set CHATANYWHERE_API_KEY or K2THINK_API_KEY in your .env file."
+                "No LLM provider configured. Set CHATANYWHERE_API_KEY or K2THINK_API_KEY in root .env.local."
             )
 
     def _build_tier_chains(self) -> dict[str, list[str]]:

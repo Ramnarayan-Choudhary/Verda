@@ -20,7 +20,351 @@ import uuid
 from enum import Enum
 from typing import Any, Literal
 
+import numpy as np
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+
+
+# ──────────────────────────────────────────────
+# FlowSearch DAG — Multi-Source Research Ingestion (Layer 0)
+# ──────────────────────────────────────────────
+# FlowSearch builds a typed DAG of SEARCH/SOLVE/ANSWER nodes to synthesize
+# N papers into a ResearchLandscape. Based on VREDA Master Architecture v2.0.
+
+
+class NodeType(str, Enum):
+    """Node types in the FlowSearch knowledge DAG."""
+    SEARCH = "search"   # Retrieve + extract from a paper/web source
+    SOLVE = "solve"     # Synthesize across 2+ parent SEARCH nodes
+    ANSWER = "answer"   # Single final consolidation node
+
+
+class NodeState(str, Enum):
+    """Execution state of a FlowSearch node."""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"   # Refiner marked this node redundant
+
+
+class KnowledgeNode(BaseModel):
+    """A single node in the FlowSearch knowledge DAG."""
+    node_id: str
+    task_type: NodeType
+    description: str
+    parent_ids: list[str] = Field(default_factory=list)
+    child_ids: list[str] = Field(default_factory=list)
+    state: NodeState = NodeState.PENDING
+    content: str | None = None
+    source_urls: list[str] = Field(default_factory=list)
+    decomposition_depth: int = 0
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class KnowledgeFlow(BaseModel):
+    """The FlowSearch DAG — incrementally built by the Flow Planner."""
+    query: str
+    nodes: dict[str, KnowledgeNode] = Field(default_factory=dict)
+    root_id: str | None = None
+    answer_id: str | None = None
+    iteration: int = 0
+    max_iterations: int = 20
+
+    def get_ready_nodes(self) -> list[KnowledgeNode]:
+        """Nodes whose ALL parents are COMPLETED — safe to execute in parallel."""
+        return [
+            n for n in self.nodes.values()
+            if n.state == NodeState.PENDING
+            and all(
+                self.nodes[pid].state == NodeState.COMPLETED
+                for pid in n.parent_ids
+                if pid in self.nodes
+            )
+        ]
+
+    def get_upstream_context(self, node_id: str) -> str:
+        """Concatenate content from all ancestor nodes for prompt injection."""
+        node = self.nodes.get(node_id)
+        if not node:
+            return ""
+        ctx: list[str] = []
+        for pid in node.parent_ids:
+            p = self.nodes.get(pid)
+            if p and p.content:
+                ctx.append(f"[From: {p.description[:60]}]\n{p.content}")
+        return "\n\n".join(ctx)
+
+    def is_complete(self) -> bool:
+        """True when ANSWER node exists and is COMPLETED."""
+        if not self.answer_id:
+            return False
+        answer = self.nodes.get(self.answer_id)
+        return answer is not None and answer.state == NodeState.COMPLETED
+
+    def add_node(self, node: KnowledgeNode) -> None:
+        """Add a node and wire parent→child edges."""
+        self.nodes[node.node_id] = node
+        for pid in node.parent_ids:
+            parent = self.nodes.get(pid)
+            if parent and node.node_id not in parent.child_ids:
+                parent.child_ids.append(node.node_id)
+        if node.task_type == NodeType.ANSWER:
+            self.answer_id = node.node_id
+        if self.root_id is None and not node.parent_ids:
+            self.root_id = node.node_id
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class PaperIntelligence(BaseModel):
+    """Deep extraction from a single paper in the FlowSearch landscape."""
+    paper_id: str = Field(default_factory=lambda: f"P{uuid.uuid4().hex[:6]}")
+    title: str = ""
+    year: int = 0
+    core_contribution: str = ""
+    methodology: str = ""
+    key_results: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    related_domains: list[str] = Field(default_factory=list)
+
+
+class CrossDomainBridge(BaseModel):
+    """A transferable concept between two research domains."""
+    source_domain: str = ""
+    target_domain: str = ""
+    bridging_concept: str = ""
+    evidence: str = ""
+    novelty_score: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class GapTaxonomy(BaseModel):
+    """4-type gap taxonomy — richer than flat MetaGap list."""
+    empirical_gaps: list[str] = Field(default_factory=list)
+    theoretical_gaps: list[str] = Field(default_factory=list)
+    methodological_gaps: list[str] = Field(default_factory=list)
+    application_gaps: list[str] = Field(default_factory=list)
+
+
+class ResearchLandscape(BaseModel):
+    """Output of FlowSearch — the full multi-paper research landscape."""
+    query: str = ""
+    papers: list[PaperIntelligence] = Field(default_factory=list)
+    gap_taxonomy: GapTaxonomy = Field(default_factory=GapTaxonomy)
+    cross_domain_bridges: list[CrossDomainBridge] = Field(default_factory=list)
+    contested_assumptions: list[str] = Field(default_factory=list)
+    sota_ceiling: str = ""
+    failed_approaches: list[str] = Field(default_factory=list)
+    knowledge_flow: KnowledgeFlow | None = None
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+# ──────────────────────────────────────────────
+# Research Space Cartography (Layer 1)
+# ──────────────────────────────────────────────
+
+
+class ContestableAssumption(BaseModel):
+    """A shared field assumption that could be wrong — feeds S3 strategy."""
+    assumption: str = ""
+    held_because: str = ""
+    vulnerable_because: str = ""
+    inversion_prediction: str = ""
+    supporting_paper_ids: list[str] = Field(default_factory=list)
+
+
+class SOTACeiling(BaseModel):
+    """Why the best current method hits a ceiling — feeds S7 strategy."""
+    best_method: str = ""
+    ceiling_metric: str = ""
+    ceiling_value: str = ""
+    structural_reason: str = ""
+    what_would_break_it: str = ""
+
+
+class ResearchSpaceMap(BaseModel):
+    """Enriched research landscape — the deep structural analysis that feeds all 7 strategies."""
+    landscape: ResearchLandscape = Field(default_factory=ResearchLandscape)
+    gap_taxonomy: GapTaxonomy = Field(default_factory=GapTaxonomy)
+    contestable_assumptions: list[ContestableAssumption] = Field(default_factory=list)
+    cross_domain_bridges: list[CrossDomainBridge] = Field(default_factory=list)
+    sota_ceiling: SOTACeiling = Field(default_factory=SOTACeiling)
+    failed_approaches_analysis: list[str] = Field(default_factory=list)
+    high_value_open_questions: list[str] = Field(default_factory=list)
+    evidence_density: dict[str, float] = Field(default_factory=dict)
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+# ──────────────────────────────────────────────
+# IdeaTree + MCGS (Layer 2) — Hybrid approach
+# ──────────────────────────────────────────────
+
+
+class MutationOp(str, Enum):
+    """7 mutation operators for hypothesis evolution."""
+    DEEPEN_MECHANISM = "deepen_mechanism"
+    NARROW_SCOPE = "narrow_scope"
+    BROADEN_CLAIM = "broaden_claim"
+    INJECT_ANALOGY = "inject_analogy"
+    CHALLENGE_ASSUME = "challenge_assume"
+    RECOMBINE = "recombine"
+    SHARPEN_FALSIFY = "sharpen_falsify"
+    NONE = "none"  # Root nodes
+
+
+class CausalChain(BaseModel):
+    """Explicit causal mechanism — required for every hypothesis."""
+    intervention: str = ""
+    intermediate: str = ""
+    outcome: str = ""
+    conditions: list[str] = Field(default_factory=list)
+    breaks_when: list[str] = Field(default_factory=list)
+
+    @field_validator("intermediate")
+    @classmethod
+    def _intermediate_must_be_specific(cls, v: str) -> str:
+        if v and len(v.split()) < 15:
+            pass  # Warn but don't reject — seeds may start short
+        return v
+
+
+class ExperimentSketch(BaseModel):
+    """Precise experiment specification — from document Layer 2."""
+    design: str = ""
+    baseline: str = ""
+    primary_metric: str = ""
+    success_threshold: str = ""
+    compute_estimate: str = ""
+    time_horizon: Literal[
+        "1_month", "3_months", "6_months", "12months_plus", ""
+    ] = ""
+    required_data: str = ""
+
+
+class HypothesisStrategy(str, Enum):
+    """7 generation strategies — each is a specific epistemic approach."""
+    GAP_FILL = "gap_fill"
+    CROSS_DOMAIN = "cross_domain"
+    ASSUMPTION_CHALLENGE = "assumption_challenge"
+    METHOD_RECOMB = "method_recomb"
+    FAILURE_INVERSION = "failure_inversion"
+    ABDUCTIVE = "abductive"
+    CONSTRAINT_RELAX = "constraint_relax"
+
+
+# Map strategies to legacy HypothesisType for frontend compatibility
+STRATEGY_TO_TYPE: dict[HypothesisStrategy, "HypothesisType"] = {}  # populated after HypothesisType defined
+
+
+class TreeNode(BaseModel):
+    """A node in the IdeaTree — tracks hypothesis lineage and MCGS scores."""
+    node_id: str = Field(default_factory=lambda: f"tn-{uuid.uuid4().hex[:8]}")
+    hypothesis_id: str = ""
+    parent_ids: list[str] = Field(default_factory=list)
+    child_ids: list[str] = Field(default_factory=list)
+    mutation_op: MutationOp = MutationOp.NONE
+    strategy: HypothesisStrategy = HypothesisStrategy.GAP_FILL
+    embedding: list[float] | None = None
+    visit_count: int = 0
+    total_value: float = 0.0
+    is_pruned: bool = False
+    experiment_result: str | None = None
+    metric_delta: float | None = None
+
+    def ucb1_score(self, total_visits: int, C: float = 1.41, novelty_bonus: float = 0.0) -> float:
+        """UCB1 exploration-exploitation score for MCGS selection."""
+        if self.visit_count == 0:
+            return float("inf")
+        exploit = self.total_value / self.visit_count
+        explore = C * (np.log(total_visits) / self.visit_count) ** 0.5
+        return exploit + explore + novelty_bonus
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class IdeaTree(BaseModel):
+    """The hypothesis tree — tracks lineage, enables MCGS selection + backpropagation."""
+    tree_id: str = Field(default_factory=lambda: f"tree-{uuid.uuid4().hex[:8]}")
+    research_query: str = ""
+    nodes: dict[str, TreeNode] = Field(default_factory=dict)
+    root_ids: list[str] = Field(default_factory=list)
+    total_visits: int = 0
+    best_node_id: str | None = None
+
+    def get_frontier(self, min_score: float = 0.4) -> list[TreeNode]:
+        """Non-pruned leaf nodes with sufficient quality."""
+        leaves = {
+            nid for nid in self.nodes
+            if not any(nid in n.child_ids for n in self.nodes.values())
+        }
+        return [
+            self.nodes[n] for n in leaves
+            if not self.nodes[n].is_pruned
+            and (self.nodes[n].total_value / max(self.nodes[n].visit_count, 1)) >= min_score
+        ]
+
+    def get_failed_nodes(self) -> list[TreeNode]:
+        """Nodes with experimental evidence of failure — used by S5 Failure Inversion."""
+        return [
+            n for n in self.nodes.values()
+            if (n.metric_delta is not None and n.metric_delta < 0)
+            or (n.visit_count > 0 and n.total_value / n.visit_count < 0.35)
+        ]
+
+    def semantic_novelty_guard(
+        self, candidate_embedding: list[float], threshold: float = 0.85
+    ) -> bool:
+        """Returns True if candidate is novel enough to insert."""
+        if not candidate_embedding:
+            return True
+        cand = np.array(candidate_embedding)
+        for node in self.nodes.values():
+            if node.embedding is not None:
+                existing = np.array(node.embedding)
+                norm_prod = np.linalg.norm(cand) * np.linalg.norm(existing) + 1e-9
+                sim = float(np.dot(cand, existing) / norm_prod)
+                if sim > threshold:
+                    return False
+        return True
+
+    def backpropagate(self, node_id: str, value: float, depth: int = 0) -> None:
+        """Backpropagate value through parent edges with decay."""
+        if depth > 10:
+            return  # Prevent infinite recursion on cycles
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+        node.visit_count += 1
+        node.total_value += value
+        self.total_visits += 1
+        for pid in node.parent_ids:
+            self.backpropagate(pid, value * 0.7, depth + 1)
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+# ──────────────────────────────────────────────
+# Memory (Layer 6) — Cross-Session Learning
+# ──────────────────────────────────────────────
+
+
+class MemoryEntry(BaseModel):
+    """A hypothesis outcome stored for cross-session memory."""
+    entry_id: str = Field(default_factory=lambda: f"mem-{uuid.uuid4().hex[:8]}")
+    session_id: str = ""
+    hypothesis_title: str = ""
+    hypothesis_embedding: list[float] = Field(default_factory=list)
+    strategy: str = ""
+    composite_score: float = 0.0
+    panel_composite: float | None = None
+    metric_delta: float | None = None
+    failure_reason: str | None = None
+    domain_tags: list[str] = Field(default_factory=list)
+    created_at: str = ""
 
 
 # ──────────────────────────────────────────────

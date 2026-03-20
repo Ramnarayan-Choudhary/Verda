@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import uuid
 
 import structlog
 
@@ -58,7 +59,8 @@ class EvolverAgent:
             role=AgentRole.EVOLVER,
         )
 
-        # Preserve lineage
+        # Force a new unique ID and preserve lineage
+        evolved.id = f"hyp-{uuid.uuid4().hex[:8]}"  # type: ignore[union-attr]
         evolved.generation_strategy = hypothesis.generation_strategy  # type: ignore[union-attr]
         evolved.source_gap_id = hypothesis.source_gap_id  # type: ignore[union-attr]
 
