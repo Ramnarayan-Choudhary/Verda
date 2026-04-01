@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   Bot,
+  Brain,
   ChevronRight,
   CircleDot,
   FileText,
@@ -22,9 +23,11 @@ import type { Conversation, Message } from '@/types';
 import type { QuestDomain, QuestRoom } from '@/types/quest';
 import { useQuestEvents } from '@/lib/ui/useQuestEvents';
 import { deriveWarRoomSnapshot, getDomainLabel } from '@/lib/ui/warroom-adapters';
+import { IrisWorkspace } from '@/components/iris';
+import type { IrisReviewScores } from '@/types/iris';
 import styles from './warroom.module.css';
 
-type CanvasTab = 'evidence' | 'arena' | 'execution' | 'manifest';
+type CanvasTab = 'evidence' | 'arena' | 'execution' | 'manifest' | 'iris';
 type ThemeMode = 'light' | 'dark';
 
 type RoomState = 'pending' | 'active' | 'done';
@@ -38,8 +41,8 @@ interface WarRoomShellProps {
   streamingText: string;
   strategistLoading: boolean;
   isProcessing: boolean;
-  hypothesisEngine: 'gpt' | 'claude';
-  onHypothesisEngineChange: (engine: 'gpt' | 'claude') => void;
+  hypothesisEngine: 'gpt' | 'claude' | 'iris';
+  onHypothesisEngineChange: (engine: 'gpt' | 'claude' | 'iris') => void;
   onSelectHypothesis: (hypothesisId: string) => void;
   onRefineHypotheses: (message: string, hypothesisEngine: 'gpt' | 'claude') => void;
   onApproveBudget: () => void;
@@ -47,6 +50,9 @@ interface WarRoomShellProps {
   onUploadFile: (file: File) => void;
   onFetchArxiv?: (arxivId: string) => void;
   inputDisabled?: boolean;
+  onIrisIdeaUpdate?: (idea: string, scores: IrisReviewScores, avgScore: number) => void;
+  onIrisMessage?: (role: 'user' | 'assistant' | 'system', content: string) => void;
+  irisEnabled?: boolean;
 }
 
 const roomTracks: { id: QuestRoom; label: string }[] = [
@@ -151,6 +157,9 @@ export default function WarRoomShell({
   onUploadFile,
   onFetchArxiv,
   inputDisabled = false,
+  onIrisIdeaUpdate,
+  onIrisMessage,
+  irisEnabled = false,
 }: WarRoomShellProps) {
   const [tab, setTab] = useState<CanvasTab>('arena');
   const [theme, setTheme] = useState<ThemeMode>(DEFAULT_THEME);
@@ -247,6 +256,16 @@ export default function WarRoomShell({
     };
   }, [activeConversationId]);
 
+  // Auto-switch canvas tab when IRIS engine is selected or deselected
+  useEffect(() => {
+    if (hypothesisEngine === 'iris') {
+      setTab('iris');
+    } else {
+      setTab((prev) => (prev === 'iris' ? 'arena' : prev));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hypothesisEngine]);
+
   const snapshot = useMemo(() => deriveWarRoomSnapshot(messages, polledEvents), [messages, polledEvents]);
   const selectedConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
@@ -335,7 +354,7 @@ export default function WarRoomShell({
     if (!draft) return;
     const hypothesis = snapshot.hypotheses.find((item) => item.id === hypothesisId);
     const label = hypothesis ? `Refine hypothesis "${hypothesis.title}": ${draft}` : draft;
-    onRefineHypotheses(label, hypothesisEngine);
+    onRefineHypotheses(label, hypothesisEngine === 'iris' ? 'gpt' : hypothesisEngine);
     setLastRefinements((prev) => ({ ...prev, [hypothesisId]: draft }));
     setRefinementDrafts((prev) => ({ ...prev, [hypothesisId]: '' }));
   };
@@ -541,6 +560,11 @@ export default function WarRoomShell({
             <button className={`${styles.tabButton} ${tab === 'manifest' ? styles.tabActive : ''}`} onClick={() => setTab('manifest')}>
               <ShieldCheck size={14} /> Manifest Studio
             </button>
+            {irisEnabled && (
+              <button className={`${styles.tabButton} ${tab === 'iris' ? styles.tabActive : ''}`} onClick={() => setTab('iris')}>
+                <Brain size={14} /> IRIS Workspace
+              </button>
+            )}
             <button className={styles.transcriptToggle} onClick={() => setTranscriptOpen((value) => !value)}>
               {transcriptOpen ? <PanelBottomClose size={14} /> : <PanelBottomOpen size={14} />}
               {transcriptOpen ? 'Hide Log' : 'Show Log'}
@@ -653,6 +677,21 @@ export default function WarRoomShell({
             <section className={styles.placeholderPanel}>
               <h2>Manifest Studio</h2>
               <p>Manifest content appears after budget approval from existing strategist routes.</p>
+            </section>
+          )}
+
+          {tab === 'iris' && (
+            <section style={{
+              flex: 1,
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+            }}>
+              <IrisWorkspace
+                onIdeaUpdate={onIrisIdeaUpdate}
+                onMessage={onIrisMessage}
+              />
             </section>
           )}
 
@@ -898,8 +937,21 @@ export default function WarRoomShell({
           >
             Claude
           </button>
+          {irisEnabled && (
+            <button
+              className={`${styles.engineButton} ${hypothesisEngine === 'iris' ? styles.engineButtonActive : ''}`}
+              onClick={() => onHypothesisEngineChange('iris')}
+              type="button"
+            >
+              <Brain size={11} /> IRIS
+            </button>
+          )}
           <span className={styles.engineHint}>
-            {hypothesisEngine === 'claude' ? 'Claude backend is pending.' : 'GPT is active.'}
+            {hypothesisEngine === 'iris'
+              ? 'IRIS MCTS ideation active.'
+              : hypothesisEngine === 'claude'
+                ? 'Claude backend is pending.'
+                : 'GPT is active.'}
           </span>
         </div>
 

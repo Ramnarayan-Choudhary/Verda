@@ -28,6 +28,7 @@ export const config = {
     },
     gemini: {
         apiKey: requireEnv('GEMINI_API_KEY'),
+        chatModel: optionalEnv('GEMINI_CHAT_MODEL', 'gemini-2.5-flash'),
     },
     openrouter: {
         apiKey: optionalEnv('OPENROUTER_API_KEY', ''),
@@ -60,6 +61,9 @@ export const config = {
     },
     hypothesisClaudeService: {
         url: optionalEnv('HYPOTHESIS_CLAUDE_SERVICE_URL', 'http://127.0.0.1:8001'),
+    },
+    irisService: {
+        url: optionalEnv('IRIS_SERVICE_URL', 'http://127.0.0.1:5001'),
     },
     app: {
         url: optionalEnv('NEXT_PUBLIC_APP_URL', 'http://localhost:3000'),

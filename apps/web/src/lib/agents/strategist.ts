@@ -6,6 +6,7 @@ import { openaiClient } from '@/lib/openai-client';
 import { openRouter } from '@/lib/openrouter';
 import { deepseek } from '@/lib/deepseek';
 import { k2think } from '@/lib/k2think';
+import { geminiChat } from '@/lib/gemini-chat-client';
 import { config } from '@/lib/config';
 import { logger } from '@/lib/logger';
 import type OpenAI from 'openai';
@@ -16,6 +17,10 @@ type ProviderCandidate = { label: string; client: OpenAI; model: string };
 
 function getProviderCandidates(): ProviderCandidate[] {
     const providers: ProviderCandidate[] = [];
+    // Gemini first — most reliable with existing API key
+    if (geminiChat) {
+        providers.push({ label: 'Gemini', client: geminiChat, model: config.gemini.chatModel });
+    }
     if (openaiClient) {
         providers.push({ label: 'OpenAI', client: openaiClient, model: config.openai.model });
     }

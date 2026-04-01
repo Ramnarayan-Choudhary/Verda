@@ -22,3 +22,10 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+# IRIS runtime directories (user uploads, generated results, API key store, logs)
+iris/uploads/
+iris/results/
+iris/logs/
+iris/secure_keys/
+iris/litellm_cache/

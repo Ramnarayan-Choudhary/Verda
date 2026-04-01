@@ -10,9 +10,12 @@ import WarRoomShell from '@/components/chat/warroom/warroom-shell';
 import type { Message, PipelineProgressEvent } from '@/types';
 import type { StrategistPhase, PaperAnalysis, CodePathAssessment } from '@/types/strategist';
 import type { PaperMetadata } from '@/lib/literature/types';
-import { FlaskConical } from 'lucide-react';
+import { FlaskConical, Brain } from 'lucide-react';
+import { IrisPage } from '@/components/iris';
+import type { IrisReviewScores } from '@/types/iris';
 
 const WARROOM_UI_ENABLED = process.env.NEXT_PUBLIC_CHAT_WARROOM_UI === '1';
+const IRIS_ENABLED = process.env.NEXT_PUBLIC_IRIS_ENABLED !== '0'; // enabled by default
 
 /** Read an NDJSON stream and update a progress message in-place. */
 async function consumeNDJSONStream(
@@ -78,7 +81,7 @@ export default function ChatPage() {
     const [strategistSessionId, setStrategistSessionId] = useState<string | null>(null);
     const [strategistPhase, setStrategistPhase] = useState<StrategistPhase>('idle');
     const [strategistLoading, setStrategistLoading] = useState(false);
-    const [selectedHypothesisEngine, setSelectedHypothesisEngine] = useState<'gpt' | 'claude'>('gpt');
+    const [mode, setMode] = useState<'gpt' | 'claude' | 'iris'>(IRIS_ENABLED ? 'iris' : 'gpt');
     const [importingPaper, setImportingPaper] = useState<string | null>(null);
     // Ref to skip the fetchMessages useEffect when we just created a conversation
     // for a pipeline operation (fetch/upload). Without this, the useEffect fires
@@ -481,7 +484,6 @@ export default function ChatPage() {
     const handleRefineHypotheses = useCallback(
         async (message: string, hypothesisEngine: 'gpt' | 'claude' = 'gpt') => {
             if (!strategistSessionId || !activeConversationId) return;
-            setSelectedHypothesisEngine(hypothesisEngine);
 
             // Show user refinement message
             const userMsg: Message = {
@@ -836,7 +838,41 @@ export default function ChatPage() {
         [userId, activeConversationId]
     );
 
-    // Route chat messages through strategist or literature search
+    // ---- IRIS Handlers ----
+
+    const handleIrisIdeaUpdate = useCallback(
+        (idea: string, _scores: IrisReviewScores, avgScore: number) => {
+            const convId = activeConversationId || 'iris-local';
+            const msg: Message = {
+                id: crypto.randomUUID(),
+                conversation_id: convId,
+                role: 'assistant',
+                content: `**IRIS Idea Update** (Score: ${avgScore.toFixed(1)}/10)\n\n${idea.slice(0, 500)}${idea.length > 500 ? '...' : ''}`,
+                metadata: { type: 'text' },
+                created_at: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, msg]);
+        },
+        [activeConversationId]
+    );
+
+    const handleIrisMessage = useCallback(
+        (role: 'user' | 'assistant' | 'system', content: string) => {
+            const convId = activeConversationId || 'iris-local';
+            const msg: Message = {
+                id: crypto.randomUUID(),
+                conversation_id: convId,
+                role,
+                content,
+                metadata: { type: 'text' },
+                created_at: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, msg]);
+        },
+        [activeConversationId]
+    );
+
+    // Route chat messages through strategist, IRIS, or literature search
     const handleSendMessageWithStrategist = useCallback(
         async (text: string) => {
             const lowerText = text.toLowerCase().trim();
@@ -845,6 +881,50 @@ export default function ChatPage() {
             const searchMatch = text.match(/^search:\s*(.+)/i);
             if (searchMatch) {
                 await handleSearchPapers(searchMatch[1].trim());
+                return;
+            }
+
+            // Detect "ideate: <topic>" command — route to IRIS
+            const ideateMatch = text.match(/^ideate:\s*(.+)/i);
+            if (ideateMatch && IRIS_ENABLED) {
+                const topic = ideateMatch[1].trim();
+                // Send to IRIS backend via the workspace component
+                try {
+                    const userMsg: Message = {
+                        id: crypto.randomUUID(),
+                        conversation_id: activeConversationId || '',
+                        role: 'user',
+                        content: `🧠 **IRIS Ideation:** ${topic}`,
+                        metadata: { type: 'text' },
+                        created_at: new Date().toISOString(),
+                    };
+                    setMessages((prev) => [...prev, userMsg]);
+                    setIsLoading(true);
+
+                    const res = await fetch('/api/iris/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content: topic }),
+                    });
+                    const data = await res.json();
+
+                    if (data.idea) {
+                        const aiMsg: Message = {
+                            id: crypto.randomUUID(),
+                            conversation_id: activeConversationId || '',
+                            role: 'assistant',
+                            content: `**Research Idea Generated** (Score: ${data.average_score?.toFixed(1) || 'N/A'}/10)\n\n${data.idea}`,
+                            metadata: { type: 'text' },
+                            created_at: new Date().toISOString(),
+                        };
+                        setMessages((prev) => [...prev, aiMsg]);
+                        if (mode !== 'iris') setMode('iris');
+                    }
+                } catch (err) {
+                    handleIrisMessage('system', `IRIS Error: ${err instanceof Error ? err.message : 'Failed'}`);
+                } finally {
+                    setIsLoading(false);
+                }
                 return;
             }
 
@@ -859,13 +939,18 @@ export default function ChatPage() {
                 (strategistPhase === 'analysis_complete' || strategistPhase === 'hypothesis_presented' || strategistPhase === 'error') &&
                 isBrainstormRequest
             ) {
-                await handleRefineHypotheses(text, selectedHypothesisEngine);
+                await handleRefineHypotheses(text, mode === 'claude' ? 'claude' : 'gpt');
             } else {
                 await handleSendMessage(text);
             }
         },
-        [strategistSessionId, strategistPhase, selectedHypothesisEngine, handleRefineHypotheses, handleSendMessage, handleSearchPapers]
+        [strategistSessionId, strategistPhase, mode, handleRefineHypotheses, handleSendMessage, handleSearchPapers, activeConversationId, handleIrisMessage]
     );
+
+    // ---- IRIS full-page mode (both WarRoom and legacy paths) ----
+    if (mode === 'iris' && IRIS_ENABLED) {
+        return <IrisPage onBack={() => setMode('gpt')} />;
+    }
 
     if (WARROOM_UI_ENABLED) {
         return (
@@ -884,21 +969,67 @@ export default function ChatPage() {
                 streamingText={streamingText}
                 strategistLoading={strategistLoading}
                 isProcessing={isProcessing}
-                hypothesisEngine={selectedHypothesisEngine}
-                onHypothesisEngineChange={setSelectedHypothesisEngine}
+                hypothesisEngine={mode}
+                onHypothesisEngineChange={(eng) => setMode(eng)}
                 onSelectHypothesis={handleSelectHypothesis}
                 onRefineHypotheses={handleRefineHypotheses}
                 onApproveBudget={handleApproveBudget}
                 onSendMessage={handleSendMessageWithStrategist}
                 onUploadFile={handleUploadFile}
                 onFetchArxiv={handleFetchArxiv}
+                onIrisIdeaUpdate={handleIrisIdeaUpdate}
+                onIrisMessage={handleIrisMessage}
+                irisEnabled={IRIS_ENABLED}
                 inputDisabled={!userId}
             />
         );
     }
 
+    // ---- Mode selector pill ----
+    const modeConfig = [
+        { id: 'gpt' as const,    label: 'GPT',    icon: <FlaskConical size={12} />, desc: 'GPT-4o hypothesis engine' },
+        { id: 'claude' as const, label: 'Claude', icon: <FlaskConical size={12} />, desc: 'Claude hypothesis engine' },
+        ...(IRIS_ENABLED ? [{ id: 'iris' as const, label: 'IRIS', icon: <Brain size={12} />, desc: 'MCTS ideation workspace' }] : []),
+    ];
+
+    const ModeSelector = () => (
+        <div style={{
+            display: 'inline-flex', gap: 2,
+            background: 'var(--bg-surface, #0d0d18)',
+            borderRadius: 'var(--radius-sm, 6px)',
+            padding: 2,
+            border: '1px solid var(--border-subtle, #1e1e35)',
+        }}>
+            {modeConfig.map((m) => (
+                <button
+                    key={m.id}
+                    type="button"
+                    title={m.desc}
+                    onClick={() => setMode(m.id)}
+                    style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        border: 'none',
+                        borderRadius: 4,
+                        padding: '3px 10px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s',
+                        background: mode === m.id ? 'rgba(99,102,241,0.18)' : 'transparent',
+                        color: mode === m.id ? 'var(--accent-indigo-light, #818cf8)' : 'var(--text-secondary, #8b8fa3)',
+                        boxShadow: mode === m.id ? 'inset 0 0 0 1px rgba(99,102,241,0.5)' : 'none',
+                    }}
+                >
+                    {m.icon}
+                    {m.label}
+                </button>
+            ))}
+        </div>
+    );
+
+    // ---- GPT / Claude chat mode ----
     return (
-        <div className="chat-layout">
+        <div className="chat-layout" style={{ display: 'flex' }}>
             <Sidebar
                 activeConversationId={activeConversationId}
                 onSelect={(id) => {
@@ -911,43 +1042,14 @@ export default function ChatPage() {
                 }}
             />
 
-            <main className="chat-main">
+            <main className="chat-main" style={{ flex: 1, minWidth: 0 }}>
                 <div className="chat-header">
                     <FlaskConical size={18} color="var(--accent-indigo-light)" />
                     <span className="chat-header-title">
                         {activeConversationId ? 'Research Quest' : 'VREDA.ai Lab'}
                     </span>
-                    <div style={{ display: 'inline-flex', gap: 6, marginLeft: 'auto', marginRight: 10 }}>
-                        <button
-                            type="button"
-                            onClick={() => setSelectedHypothesisEngine('gpt')}
-                            style={{
-                                border: selectedHypothesisEngine === 'gpt' ? '1px solid var(--accent-indigo)' : '1px solid var(--border-subtle)',
-                                background: selectedHypothesisEngine === 'gpt' ? 'rgba(99,102,241,0.12)' : 'var(--bg-surface)',
-                                color: selectedHypothesisEngine === 'gpt' ? 'var(--accent-indigo-light)' : 'var(--text-secondary)',
-                                borderRadius: 'var(--radius-sm)',
-                                padding: '2px 8px',
-                                fontSize: 11,
-                                cursor: 'pointer',
-                            }}
-                        >
-                            GPT
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setSelectedHypothesisEngine('claude')}
-                            style={{
-                                border: selectedHypothesisEngine === 'claude' ? '1px solid var(--accent-indigo)' : '1px solid var(--border-subtle)',
-                                background: selectedHypothesisEngine === 'claude' ? 'rgba(99,102,241,0.12)' : 'var(--bg-surface)',
-                                color: selectedHypothesisEngine === 'claude' ? 'var(--accent-indigo-light)' : 'var(--text-secondary)',
-                                borderRadius: 'var(--radius-sm)',
-                                padding: '2px 8px',
-                                fontSize: 11,
-                                cursor: 'pointer',
-                            }}
-                        >
-                            Claude
-                        </button>
+                    <div style={{ marginLeft: 'auto', marginRight: 10 }}>
+                        <ModeSelector />
                     </div>
                     <span className="chat-header-badge">
                         {strategistLoading
